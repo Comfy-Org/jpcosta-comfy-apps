@@ -1,0 +1,10 @@
+{
+  "jobs": [
+    {
+      "id": "e2bd12af-1b89-424c-92fe-6fdab7e9faa5",
+      "skuName": "Haven Ginger",
+      "pipeline": "wan-vace",
+      "note": "grey-out VACE control (nodes 40/41)"
+    }
+  ]
+}

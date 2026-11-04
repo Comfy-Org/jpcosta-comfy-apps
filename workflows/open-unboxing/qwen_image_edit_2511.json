@@ -1,0 +1,127 @@
+{
+  "_meta": {
+    "name": "Qwen Image Edit 2511 (open weights)",
+    "purpose": "Low-strength blend edit with fully open-weight models hosted on Comfy Cloud. No partner API. Lightning 4-step LoRA. denoise ~0.35 keeps the composite.",
+    "inputs": {
+      "10.image": "Composite / source keyframe filename",
+      "20.unet_name": "qwen_image_edit_2511_fp8mixed.safetensors",
+      "21.clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "21.type": "qwen_image",
+      "22.vae_name": "qwen_image_vae.safetensors",
+      "23.lora_name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+      "31.prompt": "Edit instruction",
+      "40.denoise": "0.30–0.45 for blend, 0.55–0.75 for a new pose"
+    },
+    "outputs": { "51": "SaveImage" }
+  },
+  "10": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "composite.png" },
+    "_meta": { "title": "Source" }
+  },
+  "20": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "qwen_image_edit_2511_fp8mixed.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": { "title": "Qwen Edit 2511" }
+  },
+  "21": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "_meta": { "title": "Qwen 2.5 VL" }
+  },
+  "22": {
+    "class_type": "VAELoader",
+    "inputs": { "vae_name": "qwen_image_vae.safetensors" },
+    "_meta": { "title": "Qwen VAE" }
+  },
+  "23": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["20", 0],
+      "lora_name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+      "strength_model": 1.0
+    },
+    "_meta": { "title": "Lightning 4-step" }
+  },
+  "24": {
+    "class_type": "ModelSamplingAuraFlow",
+    "inputs": {
+      "model": ["23", 0],
+      "shift": 3.1
+    },
+    "_meta": { "title": "AuraFlow shift" }
+  },
+  "30": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": ["10", 0],
+      "vae": ["22", 0]
+    },
+    "_meta": { "title": "Encode source" }
+  },
+  "31": {
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "inputs": {
+      "clip": ["21", 0],
+      "prompt": "Keep this exact overhead photograph. Blend the nested product into the insert so the contact shadow, scale, and paperboard edges look physical. Do not change camera, crop, or the box.",
+      "vae": ["22", 0],
+      "image1": ["10", 0]
+    },
+    "_meta": { "title": "Positive (edit)" }
+  },
+  "32": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["21", 0],
+      "text": "blurry, watermark, text, logo, extra hands, extra product, warped box, different camera"
+    },
+    "_meta": { "title": "Negative" }
+  },
+  "33": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": ["31", 0],
+      "latent": ["30", 0]
+    },
+    "_meta": { "title": "Reference latent" }
+  },
+  "40": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["24", 0],
+      "seed": 42,
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "positive": ["33", 0],
+      "negative": ["32", 0],
+      "latent_image": ["30", 0],
+      "denoise": 0.35
+    },
+    "_meta": { "title": "Sampler" }
+  },
+  "50": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["40", 0],
+      "vae": ["22", 0]
+    },
+    "_meta": { "title": "Decode" }
+  },
+  "51": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["50", 0],
+      "filename_prefix": "ou_qwen_edit"
+    },
+    "_meta": { "title": "Save Image" }
+  }
+}

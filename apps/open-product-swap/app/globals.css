@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+:root {
+  --paper: #f3f0e8;
+  --paper-2: #eae6dc;
+  --ink: #1b1814;
+  --muted: #6d675c;
+  --line: #ddd6c8;
+  --panel: #fffcf6;
+  --gold: #e6b800;
+  --gold-ink: #1b1814;
+  --blue: #3d6fd8;
+  --rust: #c45c2d;
+  --green: #2f8f4e;
+  --danger: #c0392b;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-paper-2: var(--paper-2);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-panel: var(--panel);
+  --color-gold: var(--gold);
+  --color-gold-ink: var(--gold-ink);
+  --color-blue: var(--blue);
+  --color-rust: var(--rust);
+  --color-green: var(--green);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(27, 24, 20, 0.06) 1px, transparent 0) 0 0 / 22px 22px,
+    var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+::selection {
+  background: #ffe58a;
+  color: var(--ink);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset, 0 10px 30px rgba(27, 24, 20, 0.04);
+}
+
+.drop-active {
+  outline: 2px dashed var(--gold);
+  outline-offset: -6px;
+  background: #fff8df;
+}

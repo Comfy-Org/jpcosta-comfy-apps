@@ -1,0 +1,84 @@
+{
+  "_meta": {
+    "name": "Concat + core RIFE 4.26",
+    "purpose": "Stitch LTX clips with core ConcatenateVideo, then double the frame rate with core RIFE (rife_v4.26.safetensors). CreateVideo fps is 48 (LTX 24 × multiplier 2) and audio is passed through from GetVideoComponents.",
+    "inputs": {
+      "10.file / 11.file / 12.file / 13.file": "MP4 asset file_path values from LTX clips",
+      "20.videos.video0..video3": "ConcatenateVideo autogrow (0-indexed)",
+      "40.model_name": "rife_v4.26.safetensors (models/frame_interpolation)",
+      "50.multiplier": 2,
+      "60.fps": 48
+    },
+    "outputs": { "70": "SaveVideo MP4" }
+  },
+  "10": {
+    "class_type": "LoadVideo",
+    "inputs": { "file": "clip_01.mp4" },
+    "_meta": { "title": "Clip A sealed→open" }
+  },
+  "11": {
+    "class_type": "LoadVideo",
+    "inputs": { "file": "clip_02.mp4" },
+    "_meta": { "title": "Clip B open→lift" }
+  },
+  "12": {
+    "class_type": "LoadVideo",
+    "inputs": { "file": "clip_03.mp4" },
+    "_meta": { "title": "Clip C lift→rotate" }
+  },
+  "13": {
+    "class_type": "LoadVideo",
+    "inputs": { "file": "clip_04.mp4" },
+    "_meta": { "title": "Clip D rotate→table" }
+  },
+  "20": {
+    "class_type": "ConcatenateVideo",
+    "inputs": {
+      "videos": {
+        "video0": ["10", 0],
+        "video1": ["11", 0],
+        "video2": ["12", 0],
+        "video3": ["13", 0]
+      },
+      "codec": "auto"
+    },
+    "_meta": { "title": "Concat" }
+  },
+  "30": {
+    "class_type": "GetVideoComponents",
+    "inputs": { "video": ["20", 0] },
+    "_meta": { "title": "Frames + audio + fps" }
+  },
+  "40": {
+    "class_type": "FrameInterpolationModelLoader",
+    "inputs": { "model_name": "rife_v4.26.safetensors" },
+    "_meta": { "title": "RIFE 4.26" }
+  },
+  "50": {
+    "class_type": "FrameInterpolate",
+    "inputs": {
+      "interp_model": ["40", 0],
+      "images": ["30", 0],
+      "multiplier": 2
+    },
+    "_meta": { "title": "RIFE ×2" }
+  },
+  "60": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": ["50", 0],
+      "fps": 48.0,
+      "audio": ["30", 1]
+    },
+    "_meta": { "title": "48 fps + original audio" }
+  },
+  "70": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": ["60", 0],
+      "filename_prefix": "ou_unboxing",
+      "format": "mp4"
+    },
+    "_meta": { "title": "Save Video" }
+  }
+}

@@ -78,13 +78,23 @@ npm run build
 workflows/deployments.json          deployment id, release id, endpoint, env var, optional keyEnv
 workflows/apps.config.json          app → workflow, inputs, prompt templates
 workflows/<app>/workflow_api.json   graph submitted to that deployment
-workflows/<app>/README.md           node map
+workflows/<app>/README.md           node map for the live graph
+workflows/open-unboxing/            live graph, plus the upstream multi-step graphs, NODE_MAP, REPORT, build spec
+workflows/open-product-swap/        live graph, plus Wan and LTX graphs, NODE_MAP, REPORT, build spec
 public/presets/                     unboxing box stills and card thumbnails
+demo/open-unboxing/                 committed unboxing clip and stills
+demo/open-product-swap/             committed product-swap clip and stills
+scripts/open-unboxing/              preset and demo generators (monorepo paths)
+scripts/open-product-swap/          e2e script aimed at the studio server
+apps/open-unboxing/                 upstream Next.js studio (not the Vercel entry)
+apps/open-product-swap/             upstream Next.js studio (not the Vercel entry)
 src/app/api/run/[app]               validate, resize, upload, submit
 src/app/api/jobs/[id]               poll the deployment named in the id
 src/app/api/outputs/[assetId]       stream the output after checking sig
-src/                                Next.js App Router UI
+src/                                Next.js App Router UI (carousel)
 ```
+
+Open Unboxing and Open Product Swap are carousel cards, same as the other apps (`enabled: true` in `workflows/apps.config.json`). The studios under `apps/` are the original long-running Next.js apps. They are not compiled into this build. `npm run dev` at the repo root is the carousel.
 
 ## Deploy
 

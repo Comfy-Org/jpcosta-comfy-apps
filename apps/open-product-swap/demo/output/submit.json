@@ -1,0 +1,10 @@
+{
+  "jobs": [
+    {
+      "id": "f4989ed7-c16d-4653-8d75-624282d37d1d",
+      "skuId": "sku-1",
+      "skuName": "Haven Ginger",
+      "pipeline": "wan-vace"
+    }
+  ]
+}

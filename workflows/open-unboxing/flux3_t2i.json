@@ -1,0 +1,34 @@
+{
+  "_meta": {
+    "name": "FLUX 3 text-to-image",
+    "purpose": "Generate preset box plates and product stills on Comfy Cloud.",
+    "inputs": {
+      "1.prompt": "Text description",
+      "1.aspect_ratio": "auto | 21:9 | 16:9 | 3:2 | 4:3 | 1:1 | 3:4 | 2:3 | 9:16 | …",
+      "1.resolution": "0.75K | 1K | 1.5K | 2K | 4K",
+      "1.seed": "int",
+      "1.images": "Autogrow dict; empty {} for pure T2I"
+    },
+    "outputs": { "2": "SaveImage → PNG" }
+  },
+  "1": {
+    "class_type": "Flux3ImageNode",
+    "inputs": {
+      "prompt": "Photographed from a camera mounted directly above, true 90-degree top-down overhead view, a sealed unbranded brown kraft paper mailer shipping box on a pale oak desk, no logos, no text, no hands, even studio daylight, photorealistic product photography.",
+      "aspect_ratio": "3:4",
+      "resolution": "1K",
+      "grounding": false,
+      "safety_tolerance": 4,
+      "seed": 11011
+    },
+    "_meta": { "title": "FLUX 3 Image" }
+  },
+  "2": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["1", 0],
+      "filename_prefix": "ou_flux3_t2i"
+    },
+    "_meta": { "title": "Save Image" }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "open-unboxing",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Open-source overhead ASMR unboxing studio — a Comfy alternative to Higgsfield Marketing Studio Unboxing mode.",
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "typecheck": "tsc --noEmit",
+    "lint": "next lint",
+    "generate:presets": "python3 scripts/generate_presets.py",
+    "generate:demo": "python3 scripts/e2e_demo.py"
+  },
+  "dependencies": {
+    "next": "^15.5.4",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "sharp": "^0.34.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.8",
+    "@types/react": "^19.1.15",
+    "@types/react-dom": "^19.1.9",
+    "typescript": "^5.9.2"
+  }
+}

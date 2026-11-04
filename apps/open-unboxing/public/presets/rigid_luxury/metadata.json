@@ -1,0 +1,17 @@
+{
+  "id": "rigid_luxury",
+  "empty": "/presets/rigid_luxury/empty.png",
+  "lidOn": "/presets/rigid_luxury/lid_on.png",
+  "mask": "/presets/rigid_luxury/insert_mask.png",
+  "insert": {
+    "x": 0.3182,
+    "y": 0.5304,
+    "w": 0.3443,
+    "h": 0.2736
+  },
+  "plateSize": [
+    880,
+    1184
+  ],
+  "wellHits": 88968
+}

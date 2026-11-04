@@ -29,3 +29,22 @@ Preset stills live in `public/presets/<id>/` (`empty.png`, `lid_on.png`, `thumb.
 | 21–24 | LoadImage | Optional extra angles. Removed when that photo was not uploaded |
 
 **Partner nodes:** FLUX 3 and LTX 2.5 need `extra_data.api_key_comfy_org`. That value is `COMFY_API_KEY_WORK_PERSONAL`.
+
+## Upstream studio
+
+The carousel keeps submitting `workflow_api.json`. The rest of [open-unboxing](https://github.com/jpcosta-comfy/open-unboxing) is in this repo and is not a second Vercel app.
+
+| Piece | Path |
+| --- | --- |
+| Next.js studio (`src/`, its own `/api/jobs`) | `apps/open-unboxing/` |
+| Scripts | `scripts/open-unboxing/` (monorepo paths) and `apps/open-unboxing/scripts/` (package paths) |
+| Demo clip and stills | `demo/open-unboxing/` and `apps/open-unboxing/demo/` |
+| Report | `REPORT.md` |
+| Multi-step graphs | `product_cutout.json`, `flux3_image_edit.json`, `flux3_t2i.json`, `qwen_image_edit_2511.json`, `ltx25_flf2v.json`, `concat_rife.json`, `minimax_h3_r2v.json` |
+| Node map | `NODE_MAP.md` |
+| Comfy Build spec | `build/comfy-build.yaml` |
+| License | `LICENSE` |
+
+Preset plates in `public/presets/` already matched the upstream bytes. Card thumbnails (`thumb.jpg`) exist only in this repo.
+
+Run the studio from `apps/open-unboxing` (`npm install`, then `npm run dev`). It keeps a long-lived Node process. That process is not mounted on the shared carousel.

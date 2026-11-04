@@ -1,0 +1,17 @@
+{
+  "id": "tissue_wrap",
+  "empty": "/presets/tissue_wrap/empty.png",
+  "lidOn": "/presets/tissue_wrap/lid_on.png",
+  "mask": "/presets/tissue_wrap/insert_mask.png",
+  "insert": {
+    "x": 0.3682,
+    "y": 0.4248,
+    "w": 0.2648,
+    "h": 0.2939
+  },
+  "plateSize": [
+    880,
+    1184
+  ],
+  "wellHits": 73322
+}

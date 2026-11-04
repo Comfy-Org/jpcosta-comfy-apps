@@ -159,7 +159,7 @@
         }
       },
       "promptTemplate": "Replace the product held in image 1 with the product shown in image 2. Keep the person's hands, fingers, pose, clothing, background, camera angle and lighting identical. Seat the new product naturally in the grip with matching perspective, contact shadows and reflections.{description}",
-      "notes": "Source clip is LoadVideo. SKU photo is LoadImage. FLUX 3 edits the first frame. Wan 2.1 VACE inpaints the clip. Output is the SaveVideo node.",
+      "notes": "Source clip is LoadVideo. SKU photo is LoadImage. FLUX 3 edits the first frame. Wan 2.1 VACE inpaints the clip. Output is the SaveVideo node. workflow_api.json matches product-swap-wan-vace.json except it omits the keyframe SaveImage (node 27). The LTX graph and the batch studio are apps/open-product-swap. The carousel submits workflow_api.json.",
       "output": { "node": "26", "media": "video" }
     },
     "open-unboxing": {
@@ -178,7 +178,7 @@
       "params": {
         "seed": { "node": "11", "input": "seed", "also": [{ "node": "13", "input": "seed" }] }
       },
-      "notes": "One graph: BiRefNet cutout, composite into the preset insert, FLUX 3 nested keyframe, LTX 2.5 first-last frame from the sealed lid, RIFE x2, SaveVideo. Extra product photos are FLUX reference images. Preset stills are uploaded on the server. releaseId in deployments.json is a placeholder.",
+      "notes": "One graph: BiRefNet cutout, composite into the preset insert, FLUX 3 nested keyframe, LTX 2.5 first-last frame from the sealed lid, RIFE x2, SaveVideo. Extra product photos are FLUX reference images. Preset stills are uploaded on the server. releaseId in deployments.json is a placeholder. Upstream multi-step graphs, NODE_MAP, REPORT, and the studio live beside this file and under apps/open-unboxing. The carousel submits workflow_api.json.",
       "output": { "node": "18", "media": "video" }
     },
     "pumpkin-carve": {

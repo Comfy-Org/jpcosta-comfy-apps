@@ -1,0 +1,59 @@
+{
+  "_meta": {
+    "name": "MiniMax H3 reference-to-video (alt mode)",
+    "purpose": "Single-shot overhead unboxing with native stereo ASMR audio. Feed box plates + product stills as Image 1…N. H3 Max 768P / 6s is the studio default.",
+    "inputs": {
+      "10..14.image": "Reference stills (box lid, open nest, product angles)",
+      "20.model": "MiniMax H3 | MiniMax H3 Max (string; DynamicCombo option)",
+      "20.prompt": "Must cite Image 1, Image 2, …",
+      "20.resolution": "768P | 2K (base) / 480P | 768P (Max)",
+      "20.ratio": "9:16 | 3:4 | 1:1 | adaptive",
+      "20.duration": "5–15 (Max min 5; base min 4)",
+      "20.seed": "int",
+      "20.watermark": false
+    },
+    "outputs": { "30": "SaveVideo MP4 with native audio" }
+  },
+  "10": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "lid_on.png" },
+    "_meta": { "title": "Image 1 sealed box" }
+  },
+  "11": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "nested.png" },
+    "_meta": { "title": "Image 2 product in well" }
+  },
+  "12": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "product.png" },
+    "_meta": { "title": "Image 3 product identity" }
+  },
+  "20": {
+    "class_type": "MinimaxHailuo03ReferenceNode",
+    "inputs": {
+      "model": "MiniMax H3 Max",
+      "model.prompt": "Locked 90-degree overhead unboxing, one continuous shot, 9:16, no cuts. Image 1 is the sealed unbranded box on a pale oak desk. Image 2 is the open box with the product nested in the insert. Image 3 is the product identity — match its shape, glaze, and color exactly. Bare adult hands only, no face, no torso. Sequence: sealed box → tape peel → lid opens to the nested product → two hands lift and slowly rotate the product → set it on the desk beside the open box. Audio is native ASMR: close-mic kraft paper, tape, ceramic tap, quiet room. No music, no voiceover, no logos.",
+      "model.resolution": "768P",
+      "model.ratio": "9:16",
+      "model.duration": 6,
+      "model.prompt_expansion_mode": "balanced",
+      "model.reference_detail": "standard",
+      "model.reference_images.image_1": ["10", 0],
+      "model.reference_images.image_2": ["11", 0],
+      "model.reference_images.image_3": ["12", 0],
+      "seed": 42,
+      "watermark": false
+    },
+    "_meta": { "title": "MiniMax H3 Max R2V" }
+  },
+  "30": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": ["20", 0],
+      "filename_prefix": "ou_h3_unboxing",
+      "format": "mp4"
+    },
+    "_meta": { "title": "Save Video" }
+  }
+}

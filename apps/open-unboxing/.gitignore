@@ -1,0 +1,17 @@
+node_modules
+.next
+__pycache__
+*.pyc
+out
+.turbo
+.data
+.env
+.env.local
+.env.*.local
+*.tsbuildinfo
+.DS_Store
+grok*.log
+BRIEF.md
+uploads
+tmp
+demo/run

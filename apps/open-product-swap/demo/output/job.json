@@ -1,0 +1,21 @@
+{
+  "status": "success",
+  "progress": 1,
+  "outputs": [
+    {
+      "id": "b74d94e1-eca9-51d7-92fa-c5d83cedb09b",
+      "filename": "open_product_swap_keyframe_00001_.png",
+      "subfolder": "",
+      "type": "image",
+      "format": "image/png"
+    },
+    {
+      "id": "c8cbfe0c-aea5-5cad-9c31-a4fe23b9aeb5",
+      "filename": "open_product_swap_wan_00001_.mp4",
+      "subfolder": "",
+      "type": "video",
+      "format": "video/mp4"
+    }
+  ],
+  "rawStatus": "succeeded"
+}

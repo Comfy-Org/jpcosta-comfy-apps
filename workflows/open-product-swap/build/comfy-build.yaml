@@ -1,0 +1,30 @@
+schema: comfy-build/1
+id: 0fc00e37-47c6-44ab-a688-905fbcd8c383
+name: open-product-swap
+description: 'Open Product Swap: SAM3 + Wan 2.1 VACE (CausVid) product swap'
+syncedRevision: '2026-10-21T01:12:41.073053Z'
+definition:
+  schema: distribution-definition/0
+  baseComfyVersion: v0.42.3
+  models:
+    - filename: sam3.1_multiplex_fp16.safetensors
+      sha256: 9ba99c92703c2e8b4f47de2d34a539bb8e18923049e238b780d70dbe6368eb03
+      sourceUri: https://huggingface.co/Comfy-Org/sam3.1/resolve/main/checkpoints/sam3.1_multiplex_fp16.safetensors
+      type: checkpoints
+    - filename: wan2.1_vace_14B_fp16.safetensors
+      sha256: f202a5c59b8a91ada1862c46a038214f1f7f216c61ec8350d25f69b919da4307
+      sourceUri: https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.1_vace_14B_fp16.safetensors
+      type: diffusion_models
+    - filename: Wan21_CausVid_14B_T2V_lora_rank32.safetensors
+      sha256: e5664f709f39b8352e8487e412efdac5c2fc283f21d06e289a19344daaaa198d
+      sourceUri: https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_CausVid_14B_T2V_lora_rank32.safetensors
+      type: loras
+    - filename: umt5_xxl_fp8_e4m3fn_scaled.safetensors
+      sha256: c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68
+      sourceUri: https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors
+      type: text_encoders
+    - filename: wan_2.1_vae.safetensors
+      sha256: 2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b
+      sourceUri: https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors
+      type: vae
+  customNodes: []

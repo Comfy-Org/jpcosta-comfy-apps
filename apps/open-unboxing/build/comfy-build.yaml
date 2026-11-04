@@ -1,0 +1,34 @@
+schema: comfy-build/1
+id: 65fb022b-e205-48f2-86e2-512797627198
+name: open-unboxing
+description: 'Open Unboxing: core BiRefNet cutout, Qwen Image Edit 2511, core RIFE 4.26, plus partner nodes (FLUX 3, LTX 2.5, MiniMax)'
+syncedRevision: '2026-10-21T02:03:44.45471Z'
+definition:
+  schema: distribution-definition/0
+  baseComfyVersion: v0.42.3
+  models:
+    - filename: birefnet.safetensors
+      sha256: 9ab37426bf4de0567af6b5d21b16151357149139362e6e8992021b8ce356a154
+      sourceUri: https://huggingface.co/Comfy-Org/BiRefNet/resolve/main/background_removal/birefnet.safetensors
+      type: background_removal
+    - filename: qwen_image_edit_2511_fp8mixed.safetensors
+      sha256: c9fdc158e46d3b61ef75f21ae866ca2fe808bf4a53643120d1c1e87c19280a4e
+      sourceUri: https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors
+      type: diffusion_models
+    - filename: rife_v4.26.safetensors
+      sha256: 151874592c877740e5db11522f4514df569eeafb0a0fcb2696f16e9e8d317c94
+      sourceUri: https://huggingface.co/Comfy-Org/frame_interpolation/resolve/main/frame_interpolation/rife_v4.26.safetensors
+      type: frame_interpolation
+    - filename: Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
+      sha256: 22226e8d05d354bb356627d428809f5afd7819399b077238a2b70a82883a904f
+      sourceUri: https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors
+      type: loras
+    - filename: qwen_2.5_vl_7b_fp8_scaled.safetensors
+      sha256: cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4
+      sourceUri: https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors
+      type: text_encoders
+    - filename: qwen_image_vae.safetensors
+      sha256: a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f
+      sourceUri: https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors
+      type: vae
+  customNodes: []
