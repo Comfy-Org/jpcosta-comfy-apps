@@ -1,0 +1,13 @@
+{
+  "id": "e2bd12af-1b89-424c-92fe-6fdab7e9faa5",
+  "status": "succeeded",
+  "deployment": "dep-c6eae195-e598-4f43-8928-00cb4aa3c2d7",
+  "workflow": "workflows/product-swap-wan-vace.json",
+  "size": "1280x720",
+  "length": 81,
+  "duration_s": 5,
+  "outputs": [
+    "open_product_swap_wan_720p.mp4",
+    "open_product_swap_keyframe_720p.png"
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "_meta": {
+    "name": "LTX 2.5 first-last-frame",
+    "purpose": "Animate a pair of overhead keyframes. Partner node LtxApi25ImageToVideo on Comfy Cloud. Fast 720×1280 / 3s is the default studio setting.",
+    "inputs": {
+      "10.image": "First-frame filename",
+      "11.image": "Last-frame filename",
+      "20.model.model": "LTX-2.5 (Fast) | LTX-2.5 (Pro)",
+      "20.model.duration": "2 | 3 | 4 | 5 | 6 | 8 | 10 | …",
+      "20.model.resolution": "720x1280 (9:16 overhead) | 1280x720 | 1080x1920",
+      "20.model.fps": "24 | 25",
+      "20.model.generate_audio": "true for ASMR bed",
+      "20.prompt": "Motion + audio between the two stills",
+      "20.seed": "int"
+    },
+    "outputs": { "30": "SaveVideo MP4" }
+  },
+  "10": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "kf_a.png" },
+    "_meta": { "title": "First frame" }
+  },
+  "11": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "kf_b.png" },
+    "_meta": { "title": "Last frame" }
+  },
+  "20": {
+    "class_type": "LtxApi25ImageToVideo",
+    "inputs": {
+      "image": ["10", 0],
+      "last_frame": ["11", 0],
+      "model": "LTX-2.5 (Fast)",
+      "model.duration": "3",
+      "model.resolution": "720x1280",
+      "model.fps": "24",
+      "model.generate_audio": true,
+      "prompt": "Locked-off static top-down overhead camera, 90 degrees, no camera movement, no tilt, no zoom, no dolly, no cut. Both keyframes are strict 90-degree overhead plates. Only hands move. Bare adult hands enter from the bottom of frame and perform a slow ASMR unboxing motion that carries the scene from the first still to the last still. Fingers only, no faces, no torsos. Paper fiber, tape, and ceramic. Audio: close-mic paper, tape peel, soft ceramic tap, quiet room tone. No music, no voiceover, no logos.",
+      "seed": 42
+    },
+    "_meta": { "title": "LTX 2.5 FLF2V" }
+  },
+  "30": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": ["20", 0],
+      "filename_prefix": "ou_ltx_clip",
+      "format": "mp4"
+    },
+    "_meta": { "title": "Save Video" }
+  }
+}

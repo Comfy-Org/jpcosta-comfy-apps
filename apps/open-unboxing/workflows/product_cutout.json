@@ -1,0 +1,50 @@
+{
+  "_meta": {
+    "name": "Product cutout (BiRefNet)",
+    "purpose": "Remove the studio background with core BiRefNet. InvertMask is required: RemoveBackground emits a foreground mask (subject=1), and JoinImageWithAlpha sets the PNG alpha to (1 - mask), so an inverted mask makes the product opaque and the background transparent.",
+    "inputs": {
+      "1.image": "Uploaded product filename / asset file_path",
+      "2.bg_removal_name": "birefnet.safetensors (models/background_removal)"
+    },
+    "outputs": { "6": "SaveImage RGBA cutout" }
+  },
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "product.png" },
+    "_meta": { "title": "Product photo" }
+  },
+  "2": {
+    "class_type": "LoadBackgroundRemovalModel",
+    "inputs": { "bg_removal_name": "birefnet.safetensors" },
+    "_meta": { "title": "BiRefNet" }
+  },
+  "3": {
+    "class_type": "RemoveBackground",
+    "inputs": {
+      "bg_removal_model": ["2", 0],
+      "image": ["1", 0]
+    },
+    "_meta": { "title": "Foreground mask" }
+  },
+  "4": {
+    "class_type": "InvertMask",
+    "inputs": { "mask": ["3", 0] },
+    "_meta": { "title": "Invert for JoinImageWithAlpha" }
+  },
+  "5": {
+    "class_type": "JoinImageWithAlpha",
+    "inputs": {
+      "image": ["1", 0],
+      "alpha": ["4", 0]
+    },
+    "_meta": { "title": "RGBA cutout" }
+  },
+  "6": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["5", 0],
+      "filename_prefix": "ou_cutout"
+    },
+    "_meta": { "title": "Save cutout" }
+  }
+}

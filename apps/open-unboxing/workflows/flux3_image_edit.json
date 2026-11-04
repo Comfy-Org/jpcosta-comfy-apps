@@ -1,0 +1,48 @@
+{
+  "_meta": {
+    "name": "FLUX 3 low-strength blend edit",
+    "purpose": "Turn a composited insert (and optional product refs) into a photoreal overhead keyframe. Refer to connected stills as image 1, image 2, …",
+    "inputs": {
+      "10.image": "LoadImage filename of the composite / current keyframe",
+      "11.image": "Optional product reference",
+      "1.prompt": "Edit instruction. Keep camera locked overhead.",
+      "1[\"images.image_1\"]": "link → node 10 (flat autogrow key)",
+      "1[\"images.image_2\"]": "link → node 11 (flat autogrow key)",
+      "1.aspect_ratio": "3:4 or 9:16",
+      "1.resolution": "1K"
+    },
+    "outputs": { "2": "SaveImage → edited keyframe" }
+  },
+  "10": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "composite.png" },
+    "_meta": { "title": "Keyframe / composite" }
+  },
+  "11": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "product.png" },
+    "_meta": { "title": "Product reference" }
+  },
+  "1": {
+    "class_type": "Flux3ImageNode",
+    "inputs": {
+      "prompt": "Using image 1 as the locked overhead plate, nest the exact product from image 2 into the insert well so it looks physically present: correct contact shadows, slight tissue or paperboard tuck, matching light. Do not change camera, desk, box branding (there is none), or crop. Hands are not in this frame.",
+      "images.image_1": ["10", 0],
+      "images.image_2": ["11", 0],
+      "aspect_ratio": "3:4",
+      "resolution": "1K",
+      "grounding": false,
+      "safety_tolerance": 4,
+      "seed": 42
+    },
+    "_meta": { "title": "FLUX 3 Image Edit" }
+  },
+  "2": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["1", 0],
+      "filename_prefix": "ou_keyframe"
+    },
+    "_meta": { "title": "Save Image" }
+  }
+}

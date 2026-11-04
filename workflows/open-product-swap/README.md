@@ -24,3 +24,20 @@ A short clip of someone holding a product, plus a SKU photo, becomes a new clip 
 The browser sends one video (MP4, MOV, or WebM, 4 MB or less) and one product image. The server uploads the video with `content_type` `video/mp4`, `video/quicktime`, or `video/webm`.
 
 **Partner nodes:** FLUX 3 needs `extra_data.api_key_comfy_org`. That value is `COMFY_API_KEY_WORK_PERSONAL`.
+
+## Upstream studio
+
+The carousel keeps submitting `workflow_api.json` (the Wan graph, without keyframe `SaveImage` node 27). The rest of [open-product-swap](https://github.com/jpcosta-comfy/open-product-swap) is in this repo and is not a second Vercel app.
+
+| Piece | Path |
+| --- | --- |
+| Next.js studio (`app/`, `lib/`, batch `/api/jobs`) | `apps/open-product-swap/` |
+| End-to-end script | `scripts/open-product-swap/e2e.mjs` (demo under `demo/open-product-swap/`; server is the studio) and `apps/open-product-swap/scripts/e2e.mjs` |
+| Demo clip and stills | `demo/open-product-swap/` and `apps/open-product-swap/demo/` |
+| Report | `REPORT.md` |
+| Graphs | `product-swap-wan-vace.json` (upstream Wan, includes node 27), `product-swap-ltx.json` |
+| Node map | `NODE_MAP.md` |
+| Comfy Build spec | `build/comfy-build.yaml` |
+| License | `LICENSE` |
+
+Run the studio from `apps/open-product-swap` (`npm install`, then `npm run dev`). Its `/api/jobs` routes are not mounted on the shared app. The shared poll route stays `GET /api/jobs/{app}~{jobId}`.

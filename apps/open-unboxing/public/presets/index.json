@@ -1,0 +1,53 @@
+{
+  "kraft_mailer": {
+    "id": "kraft_mailer",
+    "empty": "/presets/kraft_mailer/empty.png",
+    "lidOn": "/presets/kraft_mailer/lid_on.png",
+    "mask": "/presets/kraft_mailer/insert_mask.png",
+    "insert": {
+      "x": 0.2761,
+      "y": 0.5397,
+      "w": 0.4693,
+      "h": 0.272
+    },
+    "plateSize": [
+      880,
+      1184
+    ],
+    "wellHits": 120904
+  },
+  "rigid_luxury": {
+    "id": "rigid_luxury",
+    "empty": "/presets/rigid_luxury/empty.png",
+    "lidOn": "/presets/rigid_luxury/lid_on.png",
+    "mask": "/presets/rigid_luxury/insert_mask.png",
+    "insert": {
+      "x": 0.3182,
+      "y": 0.5304,
+      "w": 0.3443,
+      "h": 0.2736
+    },
+    "plateSize": [
+      880,
+      1184
+    ],
+    "wellHits": 88968
+  },
+  "tissue_wrap": {
+    "id": "tissue_wrap",
+    "empty": "/presets/tissue_wrap/empty.png",
+    "lidOn": "/presets/tissue_wrap/lid_on.png",
+    "mask": "/presets/tissue_wrap/insert_mask.png",
+    "insert": {
+      "x": 0.3682,
+      "y": 0.4248,
+      "w": 0.2648,
+      "h": 0.2939
+    },
+    "plateSize": [
+      880,
+      1184
+    ],
+    "wellHits": 73322
+  }
+}
