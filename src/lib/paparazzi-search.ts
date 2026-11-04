@@ -17,7 +17,7 @@ const BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 /** Wikimedia blocks generic clients. Identify the app; do not send a browser UA. */
-const WIKIMEDIA_UA = "PaparazziMe/1.0 (https://github.com/jpcosta-comfy/comfy-api-apps; celebrity photo lookup)";
+const WIKIMEDIA_UA = "PaparazziMe/1.0 (https://github.com/Comfy-Org/jpcosta-comfy-apps; celebrity photo lookup)";
 
 const WIKI_HEADERS = {
   Accept: "application/json",

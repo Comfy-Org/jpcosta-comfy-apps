@@ -2,7 +2,7 @@
 
 Sprite sheets, virtual try-on, hand product swap, paparazzi inserts, background removal, an open product-swap video, an overhead unboxing, and a Halloween pumpkin-carve timelapse, each running a real ComfyUI workflow on its own Comfy API deployment. API keys stay on the server.
 
-Live: [comfy-api-apps.vercel.app](https://comfy-api-apps.vercel.app/)
+Live: [jpcosta-comfy-apps.vercel.app](https://jpcosta-comfy-apps.vercel.app/)
 
 ## Apps
 
@@ -98,7 +98,7 @@ Open Unboxing and Open Product Swap are carousel cards, same as the other apps (
 
 ## Deploy
 
-`main` on `jpcosta-comfy/comfy-api-apps` deploys to the Vercel project `comfy-api-apps`.
+`main` on `Comfy-Org/jpcosta-comfy-apps` deploys to the Vercel project `jpcosta-comfy-apps` (team comfyui).
 
 Set `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for Production and Preview, then redeploy. Also set `COMFY_API_KEY_WORK_PERSONAL` or Open Product Swap and Open Unboxing stay offline. Set `COMFY_API_KEY_TEAM` or Pumpkin Carve stays offline. Leave the `COMFY_BASE_URL_*` variables unset unless that environment should call a different host than `workflows/deployments.json`. Leave `COMFY_MOCK` unset for live runs. Set `OUTPUT_SIGNING_SECRET` when download links should stay valid after an API key changes.
 
