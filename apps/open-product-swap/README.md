@@ -1,6 +1,6 @@
 # Open Product Swap
 
-> Upstream studio, preserved under `apps/open-product-swap` in [comfy-api-apps](https://github.com/jpcosta-comfy/comfy-api-apps). The live site is the shared carousel at the repo root (`POST /api/run/open-product-swap`), which submits `workflows/open-product-swap/workflow_api.json`. This package is a separate Next.js app. Run it from this directory. It is not what Vercel builds.
+> Upstream studio, preserved under `apps/open-product-swap` in [jpcosta-comfy-apps](https://github.com/Comfy-Org/jpcosta-comfy-apps). The live site is the shared carousel at the repo root (`POST /api/run/open-product-swap`), which submits `workflows/open-product-swap/workflow_api.json`. This package is a separate Next.js app. Run it from this directory. It is not what Vercel builds.
 
 
 

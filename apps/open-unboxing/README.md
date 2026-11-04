@@ -1,6 +1,6 @@
 # Open Unboxing
 
-> Upstream studio, preserved under `apps/open-unboxing` in [comfy-api-apps](https://github.com/jpcosta-comfy/comfy-api-apps). The live site is the shared carousel at the repo root (`POST /api/run/open-unboxing`), which submits `workflows/open-unboxing/workflow_api.json`. This package is a separate Next.js app. Run it from this directory. It is not what Vercel builds.
+> Upstream studio, preserved under `apps/open-unboxing` in [jpcosta-comfy-apps](https://github.com/Comfy-Org/jpcosta-comfy-apps). The live site is the shared carousel at the repo root (`POST /api/run/open-unboxing`), which submits `workflows/open-unboxing/workflow_api.json`. This package is a separate Next.js app. Run it from this directory. It is not what Vercel builds.
 
 
 
