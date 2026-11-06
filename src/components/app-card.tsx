@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { BackgroundValue, FormatValue } from "@/lib/choices";
 import { downloadBlob, exportCutout } from "@/lib/composite";
 import { FORM_BUDGET_BYTES, VIDEO_FORM_BUDGET_BYTES, imageRejectReason, packImages, randomSeed, shrinkForUpload, videoRejectReason, videoTypeRejectReason } from "@/lib/prepare-image";
-import { composeSideBySide, prepareReverse3dUpload } from "@/lib/video-client";
+import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
 import { LILAC, TERMINAL_STATUSES, type CatalogApp, type CatalogImage, type JobView, type RunResponse, type TextControl } from "@/lib/types";
 import { AppIcon } from "@/components/app-icon";
 
@@ -20,6 +20,7 @@ type Shot = {
   file: File;
   source: File;
   url: string;
+  sourceUrl?: string;
   name: string;
   width: number;
   height: number;
@@ -41,6 +42,7 @@ type HistoryItem = {
   video: boolean;
   compareBlob?: Blob;
   compareUrl?: string;
+  compareError?: string;
 };
 
 type Phase = "idle" | "queued" | "running" | "done" | "error";
@@ -164,7 +166,11 @@ export function AppCard({ app }: { app: CatalogApp }) {
   function revokeUpload(upload: UploadState | undefined) {
     if (!upload) return;
     const urls = new Set<string>([upload.url]);
-    for (const shot of upload.shots ?? []) urls.add(shot.url);
+    if (upload.sourceUrl) urls.add(upload.sourceUrl);
+    for (const shot of upload.shots ?? []) {
+      urls.add(shot.url);
+      if (shot.sourceUrl) urls.add(shot.sourceUrl);
+    }
     for (const url of urls) URL.revokeObjectURL(url);
   }
 
@@ -205,7 +211,11 @@ export function AppCard({ app }: { app: CatalogApp }) {
           }
           setNeed("Checking the clip…");
           const prepared = await prepareReverse3dUpload(file);
-          setNeed(null);
+          setNeed(
+            prepared.trimmed
+              ? `Using the first ${REVERSE_3D_MAX_SECONDS} seconds of this clip. Kling 4.0 Edit keeps the input length; 18 seconds is the longest that round-trips here.`
+              : null,
+          );
           setUploads((current) => {
             revokeUpload(current[role]);
             return {
@@ -214,6 +224,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
                 file: prepared.file,
                 source: file,
                 url: URL.createObjectURL(prepared.file),
+                sourceUrl: URL.createObjectURL(file),
                 name: file.name,
                 width: prepared.width,
                 height: prepared.height,
@@ -461,7 +472,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
       const before: Record<string, string> = {};
       for (const image of app.images) {
         const upload = uploads[image.key];
-        if (upload) before[image.key] = upload.url;
+        if (upload) before[image.key] = upload.sourceUrl || upload.url;
       }
       const item: HistoryItem = {
         id: payload.jobId,
@@ -480,8 +491,8 @@ export function AppCard({ app }: { app: CatalogApp }) {
           const compareBlob = await composeSideBySide(url, originalUrl);
           item.compareBlob = compareBlob;
           item.compareUrl = URL.createObjectURL(compareBlob);
-        } catch {
-          // Playblast still stands; compare download stays unavailable.
+        } catch (compareErr) {
+          item.compareError = compareErr instanceof Error ? compareErr.message : "Could not build the comparison video.";
         }
       }
       setHistory((current) => [...current, item].slice(-5));
@@ -841,11 +852,17 @@ export function AppCard({ app }: { app: CatalogApp }) {
             ) : null}
             {showVideoCompare && active ? (
               <div className="shot-wrap">
-                <ResultMedia
-                  url={active.compareUrl ?? active.url}
-                  video
-                  alt={active.compareUrl ? "Playblast versus original" : `${app.name} playblast`}
-                />
+                {active.compareUrl ? (
+                  <ResultMedia
+                    url={active.compareUrl}
+                    video
+                    alt="Original on the left, playblast on the right"
+                  />
+                ) : (
+                  <p className="pv-empty">
+                    {active.compareError || "The comparison video could not be built. You can still download the playblast."}
+                  </p>
+                )}
               </div>
             ) : null}
             {!active && primaryUpload ? (

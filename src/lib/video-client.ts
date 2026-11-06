@@ -1,7 +1,9 @@
 /** Browser helpers for Reverse 3D: duration checks, upload transcode, side-by-side compare. */
 
 export const REVERSE_3D_MAX_SECONDS = 18;
+export const REVERSE_3D_MIN_SECONDS = 3;
 export const REVERSE_3D_MIN_WIDTH = 720;
+export const REVERSE_3D_FPS = 24;
 export const REVERSE_3D_UPLOAD_TARGET_BYTES = 3_600_000;
 
 function fail(message: string): never {
@@ -34,6 +36,7 @@ export function loadVideoElement(src: string): Promise<HTMLVideoElement> {
     el.muted = true;
     el.playsInline = true;
     el.preload = "auto";
+    el.crossOrigin = "anonymous";
     const done = () => {
       el.onloadedmetadata = null;
       el.onerror = null;
@@ -52,7 +55,7 @@ export async function probeVideoFile(file: File): Promise<{ duration: number; wi
   const url = URL.createObjectURL(file);
   try {
     const el = await loadVideoElement(url);
-    const duration = Number.isFinite(el.duration) ? el.duration : 0;
+    const duration = await readDuration(el);
     const width = el.videoWidth || 0;
     const height = el.videoHeight || 0;
     el.removeAttribute("src");
@@ -63,14 +66,41 @@ export async function probeVideoFile(file: File): Promise<{ duration: number; wi
   }
 }
 
+async function readDuration(video: HTMLVideoElement): Promise<number> {
+  if (Number.isFinite(video.duration) && video.duration > 0) return video.duration;
+  try {
+    await seekTo(video, 1e9);
+  } catch {
+    // Some MediaRecorder WebMs expose duration only after a long seek.
+  }
+  if (Number.isFinite(video.duration) && video.duration > 0) return video.duration;
+  return 0;
+}
+
 function even(value: number): number {
   const rounded = Math.max(2, Math.round(value));
   return rounded % 2 === 0 ? rounded : rounded + 1;
 }
 
-async function recordRealtime(canvas: HTMLCanvasElement, duration: number, draw: () => boolean, bitsPerSecond: number): Promise<Blob> {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function requestTrackFrame(track: MediaStreamTrack): void {
+  const typed = track as MediaStreamTrack & { requestFrame?: () => void };
+  typed.requestFrame?.();
+}
+
+async function recordCanvasFrames(
+  canvas: HTMLCanvasElement,
+  frameCount: number,
+  drawFrame: (index: number) => Promise<void> | void,
+  bitsPerSecond: number,
+): Promise<Blob> {
   const mime = pickRecorderMime();
-  const stream = canvas.captureStream(24);
+  const stream = canvas.captureStream(0);
+  const track = stream.getVideoTracks()[0];
+  if (!track) fail("This browser cannot record video for upload or compare.");
   const recorder = mime
     ? new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitsPerSecond })
     : new MediaRecorder(stream, { videoBitsPerSecond: bitsPerSecond });
@@ -81,7 +111,7 @@ async function recordRealtime(canvas: HTMLCanvasElement, duration: number, draw:
   const stopped = new Promise<Blob>((resolve, reject) => {
     recorder.onerror = () => reject(new Error("Could not record the video."));
     recorder.onstop = () => {
-      for (const track of stream.getTracks()) track.stop();
+      for (const mediaTrack of stream.getTracks()) mediaTrack.stop();
       if (chunks.length === 0) {
         reject(new Error("Could not record the video."));
         return;
@@ -89,37 +119,30 @@ async function recordRealtime(canvas: HTMLCanvasElement, duration: number, draw:
       resolve(new Blob(chunks, { type: recorder.mimeType || mime || "video/webm" }));
     };
   });
-  recorder.start(250);
-  const deadline = performance.now() + duration * 1000 + 250;
-  await new Promise<void>((resolve) => {
-    const tick = () => {
-      const keepGoing = draw();
-      if (!keepGoing || performance.now() >= deadline) {
-        if (recorder.state !== "inactive") recorder.stop();
-        resolve();
-        return;
-      }
-      requestAnimationFrame(tick);
-    };
-    tick();
-  });
+  recorder.start(100);
+  const frameDelay = 1000 / REVERSE_3D_FPS;
+  for (let index = 0; index < frameCount; index += 1) {
+    await drawFrame(index);
+    requestTrackFrame(track);
+    await sleep(frameDelay);
+  }
+  if (recorder.state !== "inactive") recorder.stop();
   return stopped;
-}
-
-async function playFromStart(video: HTMLVideoElement): Promise<void> {
-  video.currentTime = 0;
-  await video.play();
 }
 
 function estimateFrameDuration(video: HTMLVideoElement): number {
   const duration = Number.isFinite(video.duration) ? video.duration : 0;
-  if (duration <= 0) return 1 / 24;
+  if (duration <= 0) return 1 / REVERSE_3D_FPS;
   const errorFor = (fps: number) => Math.abs(duration * fps - Math.round(duration * fps));
-  return errorFor(24) <= errorFor(30) ? 1 / 24 : 1 / 30;
+  return errorFor(REVERSE_3D_FPS) <= errorFor(30) ? 1 / REVERSE_3D_FPS : 1 / 30;
 }
 
 function seekTo(video: HTMLVideoElement, time: number): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (Math.abs((video.currentTime || 0) - time) < 0.0005) {
+      resolve();
+      return;
+    }
     const done = () => {
       video.removeEventListener("seeked", done);
       video.removeEventListener("error", failSeek);
@@ -136,17 +159,25 @@ function seekTo(video: HTMLVideoElement, time: number): Promise<void> {
   });
 }
 
-export async function prepareReverse3dUpload(file: File): Promise<{ file: File; width: number; height: number; duration: number }> {
+export async function prepareReverse3dUpload(file: File): Promise<{
+  file: File;
+  width: number;
+  height: number;
+  duration: number;
+  trimmed: boolean;
+}> {
   const probe = await probeVideoFile(file);
   if (probe.duration <= 0 || probe.width <= 0 || probe.height <= 0) {
     fail("Could not read that video.");
   }
-  if (probe.duration > REVERSE_3D_MAX_SECONDS + 0.05) {
-    fail(`Use a clip of ${REVERSE_3D_MAX_SECONDS} seconds or less.`);
+  if (probe.duration + 0.05 < REVERSE_3D_MIN_SECONDS) {
+    fail(`Use a clip of at least ${REVERSE_3D_MIN_SECONDS} seconds.`);
   }
+  const trimmed = probe.duration > REVERSE_3D_MAX_SECONDS + 0.05;
+  const duration = trimmed ? REVERSE_3D_MAX_SECONDS : probe.duration;
   const needsScale = probe.width < REVERSE_3D_MIN_WIDTH;
-  const fits = file.size <= REVERSE_3D_UPLOAD_TARGET_BYTES && !needsScale;
-  if (fits) return { file, width: probe.width, height: probe.height, duration: probe.duration };
+  const fits = file.size <= REVERSE_3D_UPLOAD_TARGET_BYTES && !needsScale && !trimmed;
+  if (fits) return { file, width: probe.width, height: probe.height, duration, trimmed: false };
 
   const scale = Math.max(REVERSE_3D_MIN_WIDTH / probe.width, 1);
   const width = even(probe.width * scale);
@@ -160,14 +191,15 @@ export async function prepareReverse3dUpload(file: File): Promise<{ file: File; 
   const srcUrl = URL.createObjectURL(file);
   try {
     const video = await loadVideoElement(srcUrl);
-    await playFromStart(video);
-    const bitrate = Math.max(400_000, Math.floor((REVERSE_3D_UPLOAD_TARGET_BYTES * 8) / Math.max(probe.duration, 1)));
-    const blob = await recordRealtime(
+    const frameCount = Math.max(Math.round(duration * REVERSE_3D_FPS), Math.round(REVERSE_3D_MIN_SECONDS * REVERSE_3D_FPS));
+    const bitrate = Math.max(400_000, Math.floor((REVERSE_3D_UPLOAD_TARGET_BYTES * 8) / Math.max(duration, 1)));
+    const blob = await recordCanvasFrames(
       canvas,
-      probe.duration,
-      () => {
+      frameCount,
+      async (index) => {
+        const time = Math.min((index + 0.5) / REVERSE_3D_FPS, Math.max(duration - 1 / REVERSE_3D_FPS, 0));
+        await seekTo(video, time);
         ctx.drawImage(video, 0, 0, width, height);
-        return !video.ended && video.currentTime < probe.duration;
       },
       bitrate,
     );
@@ -178,49 +210,67 @@ export async function prepareReverse3dUpload(file: File): Promise<{ file: File; 
       fail("That video is still over 4 MB after compressing. Try a shorter or smaller clip.");
     }
     const mime = blob.type || "video/webm";
-    // MediaRecorder often sets "video/webm;codecs=vp9"; the API used to reject that exact string.
     const cleanType = extensionForMime(mime) === "mp4" ? "video/mp4" : "video/webm";
     const prepared = new File([blob], `input.${extensionForMime(mime)}`, { type: cleanType });
-    return { file: prepared, width, height, duration: probe.duration };
+    return { file: prepared, width, height, duration, trimmed };
   } finally {
     URL.revokeObjectURL(srcUrl);
   }
 }
 
+function containSize(srcW: number, srcH: number, maxW: number, maxH: number): { width: number; height: number } {
+  const scale = Math.min(maxW / Math.max(srcW, 1), maxH / Math.max(srcH, 1));
+  return { width: even(srcW * scale), height: even(srcH * scale) };
+}
+
 export async function composeSideBySide(playblastUrl: string, originalUrl: string): Promise<Blob> {
   const playblast = await loadVideoElement(playblastUrl);
   const original = await loadVideoElement(originalUrl);
-  const duration = Math.min(
-    Number.isFinite(playblast.duration) ? playblast.duration : 0,
-    Number.isFinite(original.duration) ? original.duration : 0,
-  );
-  // Kling's first encoded frame is often smeared; drop it and the matching original frame.
-  const skip = Math.max(estimateFrameDuration(playblast), estimateFrameDuration(original));
-  if (duration <= skip) fail("Could not build the comparison video.");
-  const height = even(Math.max(playblast.videoHeight || 0, original.videoHeight || 0, 2));
-  const leftW = even(((original.videoWidth || 1) / Math.max(original.videoHeight || 1, 1)) * height);
-  const rightW = even(((playblast.videoWidth || 1) / Math.max(playblast.videoHeight || 1, 1)) * height);
+  const playblastDuration = await readDuration(playblast);
+  const originalDuration = await readDuration(original);
+  const skipPlayblast = Math.min(estimateFrameDuration(playblast), Math.max(playblastDuration / 2, 0));
+  const skipOriginal = Math.min(estimateFrameDuration(original), Math.max(originalDuration / 2, 0));
+  const remainPlayblast = playblastDuration - skipPlayblast;
+  const remainOriginal = originalDuration - skipOriginal;
+  if (remainPlayblast <= 0 || remainOriginal <= 0) fail("Could not build the comparison video.");
+
+  const outputDuration = Math.min(remainPlayblast, remainOriginal);
+  const frameCount = Math.max(2, Math.round(outputDuration * REVERSE_3D_FPS));
+
+  const canvasWidth = 1920;
+  const canvasHeight = 1080;
+  const gutter = 32;
+  const marginX = 48;
+  const marginY = 48;
+  const panelMaxW = (canvasWidth - marginX * 2 - gutter) / 2;
+  const panelMaxH = canvasHeight - marginY * 2;
+  const left = containSize(original.videoWidth || 1, original.videoHeight || 1, panelMaxW, panelMaxH);
+  const right = containSize(playblast.videoWidth || 1, playblast.videoHeight || 1, panelMaxW, panelMaxH);
+  const groupW = left.width + gutter + right.width;
+  const leftX = even((canvasWidth - groupW) / 2);
+  const rightX = leftX + left.width + gutter;
+  const leftY = even((canvasHeight - left.height) / 2);
+  const rightY = even((canvasHeight - right.height) / 2);
+
   const canvas = document.createElement("canvas");
-  canvas.width = leftW + rightW;
-  canvas.height = height;
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
   const ctx = canvas.getContext("2d");
   if (!ctx) fail("Could not build the comparison video.");
-  await seekTo(playblast, skip);
-  await seekTo(original, skip);
-  await playblast.play();
-  await original.play();
-  const remaining = duration - skip;
-  const bitrate = Math.max(800_000, Math.floor((6_000_000 * 8) / Math.max(remaining, 1)));
+
+  const bitrate = Math.max(1_200_000, Math.floor((8_000_000 * 8) / Math.max(outputDuration, 1)));
   try {
-    return await recordRealtime(
+    return await recordCanvasFrames(
       canvas,
-      remaining,
-      () => {
-        ctx.fillStyle = "#111";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(original, 0, 0, leftW, height);
-        ctx.drawImage(playblast, leftW, 0, rightW, height);
-        return !playblast.ended && playblast.currentTime < duration;
+      frameCount,
+      async (index) => {
+        const u = frameCount <= 1 ? 0 : index / (frameCount - 1);
+        await seekTo(original, skipOriginal + u * remainOriginal);
+        await seekTo(playblast, skipPlayblast + u * remainPlayblast);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+        ctx.drawImage(original, leftX, leftY, left.width, left.height);
+        ctx.drawImage(playblast, rightX, rightY, right.width, right.height);
       },
       bitrate,
     );
