@@ -74,9 +74,9 @@
       "note": "Comfy team workspace. Auth only COMFY_API_KEY_TEAM. Partner-only."
     },
     "reverse-3d": {
-      "deploymentId": "dep-aa908d9a-2522-4c07-af17-6ab7c5b842ef",
-      "endpointUrl": "https://dep-aa908d9a-2522-4c07-af17-6ab7c5b842ef.run.comfy.app",
-      "releaseId": "bd618533-ef60-4e55-9e12-56ab21a9518e",
+      "deploymentId": "dep-a166b403-62ba-4598-adeb-708471c20c8c",
+      "endpointUrl": "https://dep-a166b403-62ba-4598-adeb-708471c20c8c.run.comfy.app",
+      "releaseId": "acbce500-45a8-4d0c-90bc-a905a134e401",
       "env": "COMFY_BASE_URL_REVERSE_3D",
       "keyEnv": "COMFY_API_KEY_TEAM",
       "note": "Comfy team workspace. Auth only COMFY_API_KEY_TEAM. Partner-only Kling playblast."

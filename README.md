@@ -54,7 +54,7 @@ Server only. Locally that is `.env.local`. On Vercel, project `comfy-api-apps`, 
 | `COMFY_BASE_URL_OPEN_PRODUCT_SWAP` | no | Same. Default host is `https://dep-c6eae195-e598-4f43-8928-00cb4aa3c2d7.run.comfy.app`. |
 | `COMFY_BASE_URL_OPEN_UNBOXING` | no | Same. Default host is `https://dep-727f285f-f3d8-4348-8378-eacd314ebb58.run.comfy.app`. |
 | `COMFY_BASE_URL_PUMPKIN_CARVE` | no | Same. Default host is `https://dep-480af229-63d7-4022-9bdc-2dd20c2ffc9f.run.comfy.app`. |
-| `COMFY_BASE_URL_REVERSE_3D` | no | Same. Default host is `https://dep-aa908d9a-2522-4c07-af17-6ab7c5b842ef.run.comfy.app`. |
+| `COMFY_BASE_URL_REVERSE_3D` | no | Same. Default host is `https://dep-a166b403-62ba-4598-adeb-708471c20c8c.run.comfy.app`. |
 | `COMFY_MOCK` | no | `1` returns sample images and skips the deployments. Leave unset for live runs. Celebrity search still runs. Video apps return a still in mock mode. |
 | `OUTPUT_SIGNING_SECRET` | no | HMAC for download links. If unset, SHA-256 of the key for that output's app (`keyEnv` when the deployment sets one, otherwise `COMFY_API_KEY`, else `COMFY_CLOUD_API_KEY`). |
 
