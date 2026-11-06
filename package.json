@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "check": "tsx scripts/self-check.ts"
+    "check": "tsx scripts/client-fetch-check.ts && tsx scripts/self-check.ts"
   },
   "dependencies": {
     "next": "16.3.6",

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { BackgroundValue, FormatValue } from "@/lib/choices";
 import { downloadBlob, exportCutout } from "@/lib/composite";
 import { FORM_BUDGET_BYTES, VIDEO_FORM_BUDGET_BYTES, imageRejectReason, packImages, randomSeed, shrinkForUpload, videoRejectReason, videoTypeRejectReason } from "@/lib/prepare-image";
+import { clientFailureMessage, fetchBlobRetrying, type ClientStep } from "@/lib/client-fetch";
 import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
 import { LILAC, TERMINAL_STATUSES, type CatalogApp, type CatalogImage, type JobView, type RunResponse, type TextControl } from "@/lib/types";
 import { AppIcon } from "@/components/app-icon";
@@ -47,6 +48,16 @@ type HistoryItem = {
 
 type Phase = "idle" | "queued" | "running" | "done" | "error";
 
+type Recovery = {
+  kind: "status" | "download";
+  jobId: string;
+  label: string;
+  before: Record<string, string>;
+  frames: string;
+  outputId?: string;
+  sig?: string;
+};
+
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     const timer = setTimeout(resolve, ms);
@@ -86,7 +97,9 @@ export function AppCard({ app }: { app: CatalogApp }) {
   const [searching, setSearching] = useState(false);
   const [findingScene, setFindingScene] = useState(false);
   const [waited, setWaited] = useState(0);
+  const [recovery, setRecovery] = useState<Recovery | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const stepRef = useRef<ClientStep>("submit");
   const previewRef = useRef<HTMLDivElement | null>(null);
   const [previewWidth, setPreviewWidth] = useState(640);
 
@@ -374,6 +387,175 @@ export function AppCard({ app }: { app: CatalogApp }) {
     return `${controlValue(next, "format").toUpperCase()} · ${controlValue(next, "background")}`;
   }
 
+  function shotContext(): Pick<Recovery, "label" | "before" | "frames"> {
+    const before: Record<string, string> = {};
+    for (const image of app.images) {
+      const upload = uploads[image.key];
+      if (upload) before[image.key] = upload.sourceUrl || upload.url;
+    }
+    return {
+      label: labelFor(),
+      before,
+      frames: controlValue(values, "frames") || Object.keys(app.grids ?? {})[0] || "8",
+    };
+  }
+
+  function rememberResult(item: HistoryItem) {
+    setHistory((current) => [...current.filter((entry) => entry.id !== item.id), item].slice(-5));
+    setActiveId(item.id);
+    setView(0);
+    setPhase("done");
+    setProgress(1);
+    setWaited(0);
+    setRecovery(null);
+    setError(null);
+    setNeed(null);
+  }
+
+  async function attachCompare(id: string, playUrl: string, originalUrl: string) {
+    try {
+      const compareBlob = await composeSideBySide(playUrl, originalUrl);
+      const compareUrl = URL.createObjectURL(compareBlob);
+      setHistory((current) =>
+        current.map((entry) => (entry.id === id ? { ...entry, compareBlob, compareUrl, compareError: undefined } : entry)),
+      );
+    } catch (compareErr) {
+      const message = compareErr instanceof Error ? compareErr.message : "Could not build the comparison video.";
+      setHistory((current) => current.map((entry) => (entry.id === id ? { ...entry, compareError: message } : entry)));
+    }
+  }
+
+  async function saveOutput(target: Recovery, signal: AbortSignal) {
+    if (!target.outputId || !target.sig) {
+      throw new Error(app.output === "video" ? "The job finished without a video." : "The job finished without an image.");
+    }
+    stepRef.current = "download";
+    const outputUrl = `/api/outputs/${encodeURIComponent(target.outputId)}?sig=${encodeURIComponent(target.sig)}`;
+    let response: Awaited<ReturnType<typeof fetchBlobRetrying>>["response"];
+    let blob: Blob | null = null;
+    try {
+      const read = await fetchBlobRetrying(outputUrl, { signal }, fetch);
+      response = read.response;
+      blob = read.blob;
+    } catch (error) {
+      if (signal.aborted) throw error;
+      setRecovery({ ...target, kind: "download" });
+      throw error;
+    }
+    if (!response.ok || !blob) {
+      setRecovery({ ...target, kind: "download" });
+      const body = await readJsonBody(response).catch(() => null);
+      throw new Error(httpErrorMessage(response.status, body, "Could not download the result."));
+    }
+    const url = URL.createObjectURL(blob);
+    const video = blob.type.startsWith("video/");
+    const dims = await measureBlob(url, video);
+    const item: HistoryItem = {
+      id: target.jobId,
+      blob,
+      url,
+      before: target.before,
+      label: target.label,
+      frames: target.frames,
+      width: dims.width,
+      height: dims.height,
+      video,
+    };
+    rememberResult(item);
+    const originalUrl = target.before.video;
+    if (app.kind === "reverse-3d" && video && originalUrl) await attachCompare(item.id, url, originalUrl);
+  }
+
+  async function followJob(target: Recovery, controller: AbortController) {
+    stepRef.current = "status";
+    const started = Date.now();
+    const limit = app.pollMs;
+    let failures = 0;
+    let job: JobView | null = null;
+    while (!job || !TERMINAL_STATUSES.includes(job.status)) {
+      const elapsed = Date.now() - started;
+      setWaited(Math.round(elapsed / 1000));
+      if (elapsed > limit) {
+        setRecovery({ ...target, kind: "status" });
+        const minutes = Math.round(limit / 60000);
+        throw new Error(
+          app.output === "video"
+            ? `Timed out after about ${minutes} minutes. If the deployment is stopped, start it (3 active max). If it is still cold-starting, wait and run again.`
+            : "Timed out waiting for this deployment. If it is stopped, start it (3 active max). If it is still cold-starting, wait and run again.",
+        );
+      }
+      await sleep(job ? (app.output === "video" ? 2500 : 1750) : 400, controller.signal);
+      let statusRes: Response;
+      try {
+        statusRes = await fetch(`/api/jobs/${target.jobId}`, { signal: controller.signal });
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        failures += 1;
+        if (failures >= 4) {
+          setRecovery({ ...target, kind: "status" });
+          throw error;
+        }
+        continue;
+      }
+      if (!statusRes.ok) {
+        failures += 1;
+        if (failures >= 4) {
+          setRecovery({ ...target, kind: "status" });
+          const body = await readJsonBody(statusRes).catch(() => null);
+          throw new Error(httpErrorMessage(statusRes.status, body, "Could not read job status."));
+        }
+        continue;
+      }
+      let next: JobView;
+      try {
+        next = (await statusRes.json()) as JobView;
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        failures += 1;
+        if (failures >= 4) {
+          setRecovery({ ...target, kind: "status" });
+          throw error;
+        }
+        continue;
+      }
+      failures = 0;
+      job = next;
+      if (job.status === "queued") setPhase("queued");
+      if (job.status === "running" || job.status === "canceling") setPhase("running");
+      if (typeof job.progress === "number") setProgress(job.progress);
+    }
+
+    if (job.status !== "succeeded") {
+      const detail = job.error?.message || statusMessage(job.status);
+      throw new Error(detail.startsWith("HTTP ") ? detail : `Job ${job.status}: ${detail}`);
+    }
+    const output = job.outputs[0];
+    if (!output?.sig) throw new Error(app.output === "video" ? "The job finished without a video." : "The job finished without an image.");
+    await saveOutput({ ...target, kind: "download", outputId: output.id, sig: output.sig }, controller.signal);
+  }
+
+  async function resume() {
+    if (!recovery || busy) return;
+    const current = recovery;
+    const controller = new AbortController();
+    abortRef.current?.abort();
+    abortRef.current = controller;
+    setError(null);
+    setNeed(null);
+    setPhase(current.kind === "download" ? "running" : "queued");
+    stepRef.current = current.kind;
+    try {
+      if (current.kind === "download") await saveOutput(current, controller.signal);
+      else await followJob(current, controller);
+    } catch (err) {
+      setFindingScene(false);
+      if (controller.signal.aborted) return;
+      setPhase("error");
+      setWaited(0);
+      setError(clientFailureMessage(stepRef.current, err));
+    }
+  }
+
   async function run() {
     const missing = missingMessage();
     if (missing) {
@@ -388,6 +570,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
     if (busy) return;
     setError(null);
     setNeed(null);
+    setRecovery(null);
     setWaited(0);
     const nextSeed = app.hasSeed ? randomSeed() : null;
     setSeed(nextSeed);
@@ -398,6 +581,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
+    stepRef.current = "submit";
 
     try {
       const form = new FormData();
@@ -420,93 +604,14 @@ export function AppCard({ app }: { app: CatalogApp }) {
       const response = await fetch(app.endpoint, { method: "POST", body: form, signal: controller.signal });
       setFindingScene(false);
       const payload = await readJsonBody<RunResponse>(response);
-      if (!response.ok || !payload) throw new Error(httpErrorMessage(response.status, payload, "The run failed."));
-
-      const started = Date.now();
-      const limit = app.pollMs;
-      let failures = 0;
-      let job: JobView | null = null;
-      while (!job || !TERMINAL_STATUSES.includes(job.status)) {
-        const elapsed = Date.now() - started;
-        setWaited(Math.round(elapsed / 1000));
-        if (elapsed > limit) {
-          const minutes = Math.round(limit / 60000);
-          throw new Error(
-            app.output === "video"
-              ? `Timed out after about ${minutes} minutes. If the deployment is stopped, start it (3 active max). If it is still cold-starting, wait and run again.`
-              : "Timed out waiting for this deployment. If it is stopped, start it (3 active max). If it is still cold-starting, wait and run again.",
-          );
-        }
-        await sleep(job ? (app.output === "video" ? 2500 : 1750) : 400, controller.signal);
-        const statusRes = await fetch(`/api/jobs/${payload.jobId}`, { signal: controller.signal });
-        if (!statusRes.ok) {
-          failures += 1;
-          if (failures >= 4) {
-            const body = await readJsonBody(statusRes);
-            throw new Error(httpErrorMessage(statusRes.status, body, "Could not read job status."));
-          }
-          continue;
-        }
-        failures = 0;
-        job = (await statusRes.json()) as JobView;
-        if (job.status === "queued") setPhase("queued");
-        if (job.status === "running" || job.status === "canceling") setPhase("running");
-        if (typeof job.progress === "number") setProgress(job.progress);
-      }
-
-      if (job.status !== "succeeded") {
-        const detail = job.error?.message || statusMessage(job.status);
-        throw new Error(detail.startsWith("HTTP ") ? detail : `Job ${job.status}: ${detail}`);
-      }
-      const output = job.outputs[0];
-      if (!output?.sig) throw new Error(app.output === "video" ? "The job finished without a video." : "The job finished without an image.");
-      const imageRes = await fetch(`/api/outputs/${encodeURIComponent(output.id)}?sig=${encodeURIComponent(output.sig)}`, { signal: controller.signal });
-      if (!imageRes.ok) {
-        const body = await readJsonBody(imageRes);
-        throw new Error(httpErrorMessage(imageRes.status, body, "Could not download the result."));
-      }
-      const blob = await imageRes.blob();
-      const url = URL.createObjectURL(blob);
-      const video = blob.type.startsWith("video/");
-      const dims = await measureBlob(url, video);
-      const before: Record<string, string> = {};
-      for (const image of app.images) {
-        const upload = uploads[image.key];
-        if (upload) before[image.key] = upload.sourceUrl || upload.url;
-      }
-      const item: HistoryItem = {
-        id: payload.jobId,
-        blob,
-        url,
-        before,
-        label: labelFor(),
-        frames: controlValue(values, "frames") || Object.keys(app.grids ?? {})[0] || "8",
-        width: dims.width,
-        height: dims.height,
-        video,
-      };
-      const originalUrl = before.video;
-      if (app.kind === "reverse-3d" && video && originalUrl) {
-        try {
-          const compareBlob = await composeSideBySide(url, originalUrl);
-          item.compareBlob = compareBlob;
-          item.compareUrl = URL.createObjectURL(compareBlob);
-        } catch (compareErr) {
-          item.compareError = compareErr instanceof Error ? compareErr.message : "Could not build the comparison video.";
-        }
-      }
-      setHistory((current) => [...current, item].slice(-5));
-      setActiveId(item.id);
-      setView(0);
-      setPhase("done");
-      setProgress(1);
-      setWaited(0);
+      if (!response.ok || !payload?.jobId) throw new Error(httpErrorMessage(response.status, payload, "The run failed."));
+      await followJob({ kind: "status", jobId: payload.jobId, ...shotContext() }, controller);
     } catch (err) {
       setFindingScene(false);
       if (controller.signal.aborted) return;
       setPhase("error");
       setWaited(0);
-      setError(err instanceof Error ? err.message : "The run failed.");
+      setError(clientFailureMessage(stepRef.current, err));
     }
   }
 
@@ -786,10 +891,12 @@ export function AppCard({ app }: { app: CatalogApp }) {
           <div className="need" role="status">
             {phase === "error" && error ? error : need}
           </div>
-          <button className="run" type="button" onClick={() => void run()} disabled={busy || searching}>
+          <button className="run" type="button" onClick={() => void (recovery && phase === "error" ? resume() : run())} disabled={busy || searching}>
             <span className="label">
               {busy ? (
                 findingScene ? "Searching…" : phase === "queued" ? "Queued…" : "Running…"
+              ) : recovery && phase === "error" ? (
+                recovery.kind === "download" ? "Retry download" : "Check job"
               ) : active ? (
                 "↻ Run again"
               ) : (
@@ -814,8 +921,8 @@ export function AppCard({ app }: { app: CatalogApp }) {
             ) : null}
             <span className="rmeta">{rmeta}</span>
             <span className="sp" />
-            <button className="btn" type="button" disabled={!active || busy} onClick={() => void run()}>
-              ↻ Retry
+            <button className="btn" type="button" disabled={busy || (!active && !(recovery && phase === "error"))} onClick={() => void run()}>
+              {recovery && phase === "error" ? "↻ Run again" : "↻ Retry"}
             </button>
             <button className="btn dark" type="button" disabled={!active} onClick={() => void onDownload()}>
               <span className="arrow" aria-hidden="true">↓</span>
@@ -947,7 +1054,7 @@ function serverErrorText(payload: unknown): string | undefined {
   return undefined;
 }
 
-async function readJsonBody<T = unknown>(response: Response): Promise<T | null> {
+async function readJsonBody<T = unknown>(response: { text(): Promise<string> }): Promise<T | null> {
   const raw = await response.text();
   if (!raw) return null;
   try {
