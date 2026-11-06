@@ -22,6 +22,15 @@ function bad(message: string): never {
   throw new AppError(400, "invalid_input", message);
 }
 
+/** Strip RFC 6838 parameters such as ";codecs=vp9" so MediaRecorder types match. */
+export function videoMimeEssence(type: string): string {
+  return type.toLowerCase().split(";")[0].trim();
+}
+
+export function isAllowedVideoMime(type: string): boolean {
+  return DECLARED.has(videoMimeEssence(type));
+}
+
 export function sniffVideo(buf: Buffer): "mp4" | "mov" | "webm" | null {
   if (buf.length >= 12 && buf.toString("ascii", 4, 8) === "ftyp") {
     const brand = buf.toString("ascii", 8, 12);
@@ -43,8 +52,7 @@ export async function prepareVideo(file: File, maxBytes = VIDEO_MAX_BYTES): Prom
   if (file.size > maxBytes) {
     bad("That video is over 4 MB. Trim it and try again. Uploads have to stay under about 4.5 MB.");
   }
-  const declared = file.type.toLowerCase();
-  if (!DECLARED.has(declared)) bad("Use an MP4, MOV, or WebM video.");
+  if (!isAllowedVideoMime(file.type)) bad("Use an MP4, MOV, or WebM video.");
   const bytes = Buffer.from(await file.arrayBuffer());
   const kind = sniffVideo(bytes);
   if (!kind) bad("That file is not an MP4, MOV, or WebM video.");

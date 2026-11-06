@@ -15,6 +15,7 @@ export function errorJson(status: number, code: string, message: string): Respon
 
 export function errorResponse(error: unknown): Response {
   if (error instanceof AppError) {
+    console.warn(`app_error ${error.status} ${error.code}: ${error.message}`);
     return errorJson(error.status, error.code, error.message);
   }
   if (error instanceof Error && error.name === "TimeoutError") {

@@ -7,7 +7,7 @@ export const FORM_BUDGET_BYTES = 3_800_000;
 export const VIDEO_FORM_BUDGET_BYTES = 4_480_000;
 
 export function videoTypeRejectReason(file: File): string | null {
-  const type = file.type.toLowerCase();
+  const type = file.type.toLowerCase().split(";")[0].trim();
   const named = /\.(mp4|mov|webm)$/i.test(file.name);
   const typed = type === "video/mp4" || type === "video/quicktime" || type === "video/webm" || type === "video/mov";
   if (!named && !typed) return "Use an MP4, MOV, or WebM video.";

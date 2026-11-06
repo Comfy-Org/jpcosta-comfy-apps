@@ -408,8 +408,8 @@ export function AppCard({ app }: { app: CatalogApp }) {
 
       const response = await fetch(app.endpoint, { method: "POST", body: form, signal: controller.signal });
       setFindingScene(false);
-      const payload = (await response.json()) as RunResponse & { error?: { message?: string } };
-      if (!response.ok) throw new Error(payload.error?.message || "The run failed.");
+      const payload = await readJsonBody<RunResponse>(response);
+      if (!response.ok || !payload) throw new Error(httpErrorMessage(response.status, payload, "The run failed."));
 
       const started = Date.now();
       const limit = app.pollMs;
@@ -431,8 +431,8 @@ export function AppCard({ app }: { app: CatalogApp }) {
         if (!statusRes.ok) {
           failures += 1;
           if (failures >= 4) {
-            const body = (await statusRes.json().catch(() => null)) as { error?: { message?: string } } | null;
-            throw new Error(body?.error?.message || "Could not read job status.");
+            const body = await readJsonBody(statusRes);
+            throw new Error(httpErrorMessage(statusRes.status, body, "Could not read job status."));
           }
           continue;
         }
@@ -444,14 +444,15 @@ export function AppCard({ app }: { app: CatalogApp }) {
       }
 
       if (job.status !== "succeeded") {
-        throw new Error(job.error?.message || statusMessage(job.status));
+        const detail = job.error?.message || statusMessage(job.status);
+        throw new Error(detail.startsWith("HTTP ") ? detail : `Job ${job.status}: ${detail}`);
       }
       const output = job.outputs[0];
       if (!output?.sig) throw new Error(app.output === "video" ? "The job finished without a video." : "The job finished without an image.");
       const imageRes = await fetch(`/api/outputs/${encodeURIComponent(output.id)}?sig=${encodeURIComponent(output.sig)}`, { signal: controller.signal });
       if (!imageRes.ok) {
-        const body = (await imageRes.json().catch(() => null)) as { error?: { message?: string } } | null;
-        throw new Error(body?.error?.message || "Could not download the result.");
+        const body = await readJsonBody(imageRes);
+        throw new Error(httpErrorMessage(imageRes.status, body, "Could not download the result."));
       }
       const blob = await imageRes.blob();
       const url = URL.createObjectURL(blob);
@@ -578,7 +579,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
         : phase === "done"
           ? "Done"
           : phase === "error"
-            ? "Error"
+            ? errorHttpLabel(error)
             : "Idle";
 
   const rmeta = active
@@ -772,7 +773,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
           ) : null}
           </div>
           <div className="need" role="status">
-            {need}
+            {phase === "error" && error ? error : need}
           </div>
           <button className="run" type="button" onClick={() => void run()} disabled={busy || searching}>
             <span className="label">
@@ -914,6 +915,41 @@ export function AppCard({ app }: { app: CatalogApp }) {
       </div>
     </article>
   );
+}
+
+function serverErrorText(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const record = payload as { error?: unknown; message?: unknown };
+  const nested = record.error;
+  if (typeof nested === "string" && nested.trim()) return nested.trim();
+  if (nested && typeof nested === "object" && typeof (nested as { message?: unknown }).message === "string") {
+    const message = (nested as { message: string }).message.trim();
+    if (message) return message;
+  }
+  if (typeof record.message === "string" && record.message.trim()) return record.message.trim();
+  return undefined;
+}
+
+async function readJsonBody<T = unknown>(response: Response): Promise<T | null> {
+  const raw = await response.text();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function httpErrorMessage(status: number, payload: unknown, fallback: string): string {
+  const server = serverErrorText(payload);
+  if (server) return `HTTP ${status}: ${server}`;
+  if (status === 413) return "HTTP 413: The upload was over the server limit of about 4.5 MB. Trim the clip or wait for it to compress.";
+  return `HTTP ${status}: ${fallback}`;
+}
+
+function errorHttpLabel(error: string | null): string {
+  const match = error?.match(/^HTTP\s+(\d{3})\b/);
+  return match ? `Error ${match[1]}` : "Error";
 }
 
 function statusMessage(status: string): string {
