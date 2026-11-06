@@ -1,5 +1,5 @@
 {
-  "$comment": "Personal Comfy API deployments (account: personal, GPU rtx-pro-6000-server, region us, min 0 / max 1). Each app submits Comfy API v2 to its own https://<deployment>.run.comfy.app host. These defaults match the personal endpoint list. Override one host with the env var in `env` (Preview/Production). Do not point an app at https://cloud.comfy.org. COMFY_CLOUD_BASE_URL is ignored. Apps with keyEnv authenticate with only that variable (no fallback to COMFY_API_KEY). Open Product Swap and Open Unboxing live in the work-personal workspace. Pumpkin Carve lives in the Comfy team workspace and uses COMFY_API_KEY_TEAM only.",
+  "$comment": "Personal Comfy API deployments (account: personal, GPU rtx-pro-6000-server, region us, min 0 / max 1). Each app submits Comfy API v2 to its own https://<deployment>.run.comfy.app host. These defaults match the personal endpoint list. Override one host with the env var in `env` (Preview/Production). Do not point an app at https://cloud.comfy.org. COMFY_CLOUD_BASE_URL is ignored. Apps with keyEnv authenticate with only that variable (no fallback to COMFY_API_KEY). Open Product Swap and Open Unboxing live in the work-personal workspace. Pumpkin Carve and Reverse 3D live in the Comfy team workspace and use COMFY_API_KEY_TEAM only.",
   "account": "personal",
   "gpu": "rtx-pro-6000-server",
   "region": "us",
@@ -72,6 +72,14 @@
       "env": "COMFY_BASE_URL_PUMPKIN_CARVE",
       "keyEnv": "COMFY_API_KEY_TEAM",
       "note": "Comfy team workspace. Auth only COMFY_API_KEY_TEAM. Partner-only."
+    },
+    "reverse-3d": {
+      "deploymentId": "dep-aa908d9a-2522-4c07-af17-6ab7c5b842ef",
+      "endpointUrl": "https://dep-aa908d9a-2522-4c07-af17-6ab7c5b842ef.run.comfy.app",
+      "releaseId": "bd618533-ef60-4e55-9e12-56ab21a9518e",
+      "env": "COMFY_BASE_URL_REVERSE_3D",
+      "keyEnv": "COMFY_API_KEY_TEAM",
+      "note": "Comfy team workspace. Auth only COMFY_API_KEY_TEAM. Partner-only Kling playblast."
     }
   }
 }

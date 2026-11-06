@@ -56,6 +56,7 @@ const EXPECTED_ENDPOINTS: Record<string, string> = {
   "open-product-swap": "https://dep-c6eae195-e598-4f43-8928-00cb4aa3c2d7.run.comfy.app",
   "open-unboxing": "https://dep-727f285f-f3d8-4348-8378-eacd314ebb58.run.comfy.app",
   "pumpkin-carve": "https://dep-480af229-63d7-4022-9bdc-2dd20c2ffc9f.run.comfy.app",
+  "reverse-3d": "https://dep-aa908d9a-2522-4c07-af17-6ab7c5b842ef.run.comfy.app",
 };
 
 const deploymentEnvNames = Object.keys(EXPECTED_ENDPOINTS).map(deploymentEnvName);
@@ -74,6 +75,7 @@ assert.deepEqual(listVisibleAppIds(), [
   "open-product-swap",
   "open-unboxing",
   "pumpkin-carve",
+  "reverse-3d",
 ]);
 assert.deepEqual(
   buildCatalog().map((app) => app.id),
@@ -86,6 +88,7 @@ assert.deepEqual(
     "open-product-swap",
     "open-unboxing",
     "pumpkin-carve",
+    "reverse-3d",
   ],
 );
 const swapCatalog = buildCatalog().find((app) => app.id === "hand-product-swap");
@@ -138,6 +141,21 @@ assert.deepEqual(
   ["image"],
 );
 assert.equal(carveCatalog?.hasSeed, true);
+const reverseCatalog = buildCatalog().find((app) => app.id === "reverse-3d");
+assert.equal(reverseCatalog?.name, "Reverse 3D");
+assert.equal(reverseCatalog?.tagline, "Turn a final shot into a blocky playblast");
+assert.equal(reverseCatalog?.kind, "reverse-3d");
+assert.equal(reverseCatalog?.icon, "cube");
+assert.equal(reverseCatalog?.output, "video");
+assert.equal(reverseCatalog?.pollMs, 15 * 60 * 1000);
+assert.equal(reverseCatalog?.runLabel, "Make playblast");
+assert.equal(reverseCatalog?.views.join(","), "Playblast,Compare");
+assert.deepEqual(
+  reverseCatalog?.images.map((image) => image.key),
+  ["video"],
+);
+assert.equal(reverseCatalog?.images[0]?.accept, "video");
+assert.equal(reverseCatalog?.hasSeed, true);
 assert.equal(carveCatalog?.controls.length, 0);
 const paparazziCatalog = buildCatalog().find((app) => app.id === "paparazzi-me");
 assert.equal(paparazziCatalog?.name, "Paparazzi Me");
@@ -170,9 +188,16 @@ assert.equal(getApp("pumpkin-carve")?.enabled, true);
 assert.equal(getApp("pumpkin-carve")?.partnerNodes, true);
 assert.equal(getApp("pumpkin-carve")?.output.node, "50");
 assert.equal(getApp("pumpkin-carve")?.output.media, "video");
+assert.equal(getApp("reverse-3d")?.enabled, true);
+assert.equal(getApp("reverse-3d")?.partnerNodes, true);
+assert.equal(getApp("reverse-3d")?.output.node, "21");
+assert.equal(getApp("reverse-3d")?.output.media, "video");
+assert.equal(getApp("reverse-3d")?.videoInputs?.video.node, "10");
+assert.equal(getApp("reverse-3d")?.videoInputs?.video.maxSeconds, 18);
 assert.equal(getDeployment("open-product-swap")?.keyEnv, "COMFY_API_KEY_WORK_PERSONAL");
 assert.equal(getDeployment("open-unboxing")?.keyEnv, "COMFY_API_KEY_WORK_PERSONAL");
 assert.equal(getDeployment("pumpkin-carve")?.keyEnv, "COMFY_API_KEY_TEAM");
+assert.equal(getDeployment("reverse-3d")?.keyEnv, "COMFY_API_KEY_TEAM");
 assert.equal(getDeployment("pumpkin-carve")?.releaseId, "87486a19-62f1-40e4-a423-3563387e31d4");
 assert.equal(getDeployment("open-unboxing")?.releaseId, "69e82472-1206-473f-851e-286c5fcb2480");
 assert.equal(getDeployment("hand-product-swap")?.keyEnv, undefined);
@@ -515,6 +540,25 @@ assert.deepEqual(carveJob.workflow["40"].inputs.last_frame, ["30", 0]);
 assert.equal(carveJob.workflow["50"].class_type, "SaveVideo");
 assert.deepEqual(carveJob.workflow["50"].inputs.video, ["40", 0]);
 assert.equal(carveJob.extra_data?.api_key_comfy_org, "team-key");
+
+const reverse3d = mustApp("reverse-3d");
+const reverseJob = buildJobBody(
+  reverse3d,
+  { video: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", filePath: "input.mp4" } },
+  { seed: 42, hasImage: true },
+  "team-key",
+);
+assert.equal(reverseJob.workflow["10"].class_type, "LoadVideo");
+assert.deepEqual(reverseJob.workflow["10"].inputs.file, {
+  __type: "core/ASSET",
+  info: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", file_path: "input.mp4" },
+});
+assert.equal(reverseJob.workflow["20"].class_type, "Kling4EditVideoNode");
+assert.deepEqual(reverseJob.workflow["20"].inputs["model.video_1"], ["10", 0]);
+assert.equal(reverseJob.workflow["20"].inputs["model.seed"], 42);
+assert.equal(reverseJob.workflow["21"].class_type, "SaveVideo");
+assert.equal(reverseJob.extra_data?.api_key_comfy_org, "team-key");
+
 const stillPrompt = String(carveJob.workflow["30"].inputs.prompt);
 const blankPrompt = String(carveJob.workflow["32"].inputs.prompt);
 const videoPrompt = String(carveJob.workflow["40"].inputs["model.prompt"]);
@@ -571,10 +615,13 @@ assert.equal(apiKey(), "shared-key");
 const savedTeamKey = process.env.COMFY_API_KEY_TEAM;
 process.env.COMFY_API_KEY_TEAM = "team-key";
 assert.equal(apiKey("pumpkin-carve"), "team-key");
+assert.equal(apiKey("reverse-3d"), "team-key");
 assert.equal(apiKey("hand-product-swap"), "shared-key");
 delete process.env.COMFY_API_KEY_TEAM;
 assert.equal(apiKey("pumpkin-carve"), null);
+assert.equal(apiKey("reverse-3d"), null);
 assert.match(missingKeyMessage("pumpkin-carve"), /COMFY_API_KEY_TEAM/);
+assert.match(missingKeyMessage("reverse-3d"), /COMFY_API_KEY_TEAM/);
 assert.equal(missingKeyMessage("pumpkin-carve").includes("COMFY_API_KEY or"), false);
 if (savedTeamKey === undefined) delete process.env.COMFY_API_KEY_TEAM;
 else process.env.COMFY_API_KEY_TEAM = savedTeamKey;

@@ -9,19 +9,42 @@
       "cloudWorkflowId": "b4f6d5c2-597a-46b5-924d-bd54f4b1f212",
       "cloudWorkflowName": "comfy-api-apps - Product Relight",
       "partnerNodes": false,
-      "imageInputs": { "image": { "node": "1", "input": "image", "maxSide": 1536 } },
+      "imageInputs": {
+        "image": {
+          "node": "1",
+          "input": "image",
+          "maxSide": 1536
+        }
+      },
       "params": {
-        "prompt": { "node": "10", "input": "prompt", "builtFrom": ["preset", "direction", "intensity"] },
-        "seed": { "node": "13", "input": "seed" }
+        "prompt": {
+          "node": "10",
+          "input": "prompt",
+          "builtFrom": [
+            "preset",
+            "direction",
+            "intensity"
+          ]
+        },
+        "seed": {
+          "node": "13",
+          "input": "seed"
+        }
       },
       "presets": {
         "studio": "clean professional studio lighting, a soft white key light from the {direction} with gentle fill light, soft realistic shadows, neutral light grey background",
         "golden": "warm golden hour sunlight coming from the {direction}, long soft shadows, warm orange and amber tones, soft haze",
         "neon": "vivid neon lighting: saturated magenta and electric cyan neon light coming from the {direction}, strong colored rim light on the product edges, dark moody background with soft neon glow, colorful reflections"
       },
-      "intensityWords": { "0-33": "subtle", "34-66": "balanced", "67-100": "strong, dramatic" },
-      "promptTemplate": "重新照明, relight the image using {intensity} {preset}, keep the product shape, materials and details unchanged",
-      "output": { "node": "15" }
+      "intensityWords": {
+        "0-33": "subtle",
+        "34-66": "balanced",
+        "67-100": "strong, dramatic"
+      },
+      "promptTemplate": "\u91cd\u65b0\u7167\u660e, relight the image using {intensity} {preset}, keep the product shape, materials and details unchanged",
+      "output": {
+        "node": "15"
+      }
     },
     "image-upscaler": {
       "title": "Image Upscaler",
@@ -30,12 +53,31 @@
       "cloudWorkflowId": "fb6f5a18-d7cf-496d-8c61-6b20fb80ac96",
       "cloudWorkflowName": "comfy-api-apps - Image Upscaler",
       "partnerNodes": false,
-      "imageInputs": { "image": { "node": "1", "input": "image", "maxSide": 1024 } },
-      "params": {
-        "scale": { "node": "4", "input": "scale_by", "map": { "2": 0.5, "4": 1.0 } },
-        "model": { "node": "2", "input": "model_name", "default": "4x-UltraSharp.pth" }
+      "imageInputs": {
+        "image": {
+          "node": "1",
+          "input": "image",
+          "maxSide": 1024
+        }
       },
-      "output": { "node": "5" }
+      "params": {
+        "scale": {
+          "node": "4",
+          "input": "scale_by",
+          "map": {
+            "2": 0.5,
+            "4": 1.0
+          }
+        },
+        "model": {
+          "node": "2",
+          "input": "model_name",
+          "default": "4x-UltraSharp.pth"
+        }
+      },
+      "output": {
+        "node": "5"
+      }
     },
     "sprite-generator": {
       "title": "Sprite Generator",
@@ -44,16 +86,45 @@
       "cloudWorkflowId": "48e49e4d-2a1d-4338-977d-36347a3b4a4d",
       "cloudWorkflowName": "comfy-api-apps - Sprite Generator",
       "partnerNodes": true,
-      "imageInputs": { "image": { "node": "1", "input": "image", "maxSide": 1024 } },
-      "params": {
-        "prompt": { "node": "2", "input": "prompt", "builtFrom": ["style", "motion", "description"] },
-        "seed": { "node": "2", "input": "seed" }
+      "imageInputs": {
+        "image": {
+          "node": "1",
+          "input": "image",
+          "maxSide": 1024
+        }
       },
-      "grids": { "8": "4x2" },
-      "styles": { "pixel": "pixelart, 32x32 pixels", "toon": "flat 2D toon", "3d": "clean 3D cartoon" },
-      "motions": { "idle": "idle breathing loop, subtle breathing, soft blink", "walk": "side-view walk cycle, facing right", "jump": "jump sequence, crouch, take-off, air, landing" },
+      "params": {
+        "prompt": {
+          "node": "2",
+          "input": "prompt",
+          "builtFrom": [
+            "style",
+            "motion",
+            "description"
+          ]
+        },
+        "seed": {
+          "node": "2",
+          "input": "seed"
+        }
+      },
+      "grids": {
+        "8": "4x2"
+      },
+      "styles": {
+        "pixel": "pixelart, 32x32 pixels",
+        "toon": "flat 2D toon",
+        "3d": "clean 3D cartoon"
+      },
+      "motions": {
+        "idle": "idle breathing loop, subtle breathing, soft blink",
+        "walk": "side-view walk cycle, facing right",
+        "jump": "jump sequence, crouch, take-off, air, landing"
+      },
       "promptTemplate": "{style} sprite sheet of the character in the reference image, white background, 4 x 2 grid of images\n\n{motion}{description}",
-      "output": { "node": "3" }
+      "output": {
+        "node": "3"
+      }
     },
     "virtual-try-on": {
       "title": "Virtual Try On",
@@ -63,14 +134,34 @@
       "cloudWorkflowName": "comfy-api-apps - Virtual Try On",
       "partnerNodes": true,
       "imageInputs": {
-        "person": { "node": "1", "input": "image", "maxSide": 1536 },
-        "garment": { "node": "2", "input": "image", "maxSide": 1536 }
+        "person": {
+          "node": "1",
+          "input": "image",
+          "maxSide": 1536
+        },
+        "garment": {
+          "node": "2",
+          "input": "image",
+          "maxSide": 1536
+        }
       },
       "params": {
-        "prompt": { "node": "3", "input": "prompt", "builtFrom": ["fit"], "template": "Replace the outfit with the reference garment, {fit} fit" },
-        "seed": { "node": "3", "input": "seed" }
+        "prompt": {
+          "node": "3",
+          "input": "prompt",
+          "builtFrom": [
+            "fit"
+          ],
+          "template": "Replace the outfit with the reference garment, {fit} fit"
+        },
+        "seed": {
+          "node": "3",
+          "input": "seed"
+        }
       },
-      "output": { "node": "4" }
+      "output": {
+        "node": "4"
+      }
     },
     "hand-product-swap": {
       "title": "Hand Product Swap",
@@ -80,16 +171,36 @@
       "cloudWorkflowName": "comfy-api-apps - Hand Product Swap",
       "partnerNodes": true,
       "imageInputs": {
-        "hand": { "node": "10", "input": "image", "maxSide": 1536 },
-        "product": { "node": "11", "input": "image", "maxSide": 1536 }
+        "hand": {
+          "node": "10",
+          "input": "image",
+          "maxSide": 1536
+        },
+        "product": {
+          "node": "11",
+          "input": "image",
+          "maxSide": 1536
+        }
       },
       "params": {
-        "prompt": { "node": "17", "input": "prompt" },
-        "seed": { "node": "17", "input": "seed" },
-        "resolution": { "node": "17", "input": "resolution", "default": "2K" }
+        "prompt": {
+          "node": "17",
+          "input": "prompt"
+        },
+        "seed": {
+          "node": "17",
+          "input": "seed"
+        },
+        "resolution": {
+          "node": "17",
+          "input": "resolution",
+          "default": "2K"
+        }
       },
       "promptTemplate": "Swap the product the subject is holding in image 1 with the product in image 2. Keep the same hand, grip, pose, camera angle, and lighting. Only replace the held object with product Y from image 2.",
-      "output": { "node": "15" }
+      "output": {
+        "node": "15"
+      }
     },
     "paparazzi-me": {
       "title": "Paparazzi Me",
@@ -99,17 +210,37 @@
       "cloudWorkflowName": "comfy-api-apps - Paparazzi Me",
       "partnerNodes": true,
       "imageInputs": {
-        "scene": { "node": "11", "input": "image", "maxSide": 1536 },
-        "user": { "node": "12", "input": "image", "maxSide": 1536 }
+        "scene": {
+          "node": "11",
+          "input": "image",
+          "maxSide": 1536
+        },
+        "user": {
+          "node": "12",
+          "input": "image",
+          "maxSide": 1536
+        }
       },
       "params": {
-        "prompt": { "node": "35", "input": "prompt" },
-        "seed": { "node": "35", "input": "seed" },
-        "resolution": { "node": "35", "input": "resolution", "default": "2K" }
+        "prompt": {
+          "node": "35",
+          "input": "prompt"
+        },
+        "seed": {
+          "node": "35",
+          "input": "seed"
+        },
+        "resolution": {
+          "node": "35",
+          "input": "resolution",
+          "default": "2K"
+        }
       },
-      "promptTemplate": "Create a realistic paparazzi-style photograph. Image 1 is the celebrity/paparazzi scene reference — keep the same location, background, camera angle, flash lighting, grain, and candid paparazzi vibe. Image 2 is the user — reproduce their face and identity EXACTLY (facial features, skin tone, hair). Insert the person from image 2 into the scene from image 1 so they appear together with the celebrity (standing beside or near them, same depth of field, matching shadows and flash highlights). Keep clothing on the user natural for the scene unless image 2 already shows appropriate attire. Photorealistic paparazzi photojournalism look: harsh on-camera flash, slight motion, nightlife/event energy. Do not change the celebrity's face. No text overlays, no watermarks, no logos.",
+      "promptTemplate": "Create a realistic paparazzi-style photograph. Image 1 is the celebrity/paparazzi scene reference \u2014 keep the same location, background, camera angle, flash lighting, grain, and candid paparazzi vibe. Image 2 is the user \u2014 reproduce their face and identity EXACTLY (facial features, skin tone, hair). Insert the person from image 2 into the scene from image 1 so they appear together with the celebrity (standing beside or near them, same depth of field, matching shadows and flash highlights). Keep clothing on the user natural for the scene unless image 2 already shows appropriate attire. Photorealistic paparazzi photojournalism look: harsh on-camera flash, slight motion, nightlife/event energy. Do not change the celebrity's face. No text overlays, no watermarks, no logos.",
       "notes": "Celebrity name is site-side search only and is not sent to the workflow. A scene file overrides search. The downloaded scene still goes to node 11 and the selfie to node 12.",
-      "output": { "node": "30" }
+      "output": {
+        "node": "30"
+      }
     },
     "background-removal": {
       "title": "Background Removal",
@@ -118,10 +249,18 @@
       "cloudWorkflowId": "ced40cbe-93c5-4bc9-8829-2cc5d31cfe6f",
       "cloudWorkflowName": "comfy-api-apps - Background Removal",
       "partnerNodes": false,
-      "imageInputs": { "image": { "node": "1", "input": "image", "maxSide": 2048 } },
+      "imageInputs": {
+        "image": {
+          "node": "1",
+          "input": "image",
+          "maxSide": 2048
+        }
+      },
       "params": {},
       "notes": "Output is an RGBA PNG. White / lilac backgrounds are composited client-side on a canvas.",
-      "output": { "node": "6" }
+      "output": {
+        "node": "6"
+      }
     },
     "open-product-swap": {
       "title": "Open Product Swap",
@@ -131,36 +270,80 @@
       "cloudWorkflowName": "comfy-api-apps - Open Product Swap",
       "partnerNodes": true,
       "imageInputs": {
-        "product": { "node": "6", "input": "image", "maxSide": 1536 }
+        "product": {
+          "node": "6",
+          "input": "image",
+          "maxSide": 1536
+        }
       },
       "videoInputs": {
-        "video": { "node": "1", "input": "file", "maxBytes": 4194304 }
+        "video": {
+          "node": "1",
+          "input": "file",
+          "maxBytes": 4194304
+        }
       },
       "params": {
-        "prompt": { "node": "8", "input": "prompt", "builtFrom": ["description"] },
+        "prompt": {
+          "node": "8",
+          "input": "prompt",
+          "builtFrom": [
+            "description"
+          ]
+        },
         "positive": {
           "node": "18",
           "input": "text",
           "template": "A person holds the product from the reference image. Photorealistic, matching the original lighting, hands and motion unchanged.{description}"
         },
-        "seed": { "node": "21", "input": "seed", "also": [{ "node": "8", "input": "seed" }] },
+        "seed": {
+          "node": "21",
+          "input": "seed",
+          "also": [
+            {
+              "node": "8",
+              "input": "seed"
+            }
+          ]
+        },
         "videoSize": {
           "node": "4",
           "input": "width",
           "default": "480p",
-          "map": { "480p": 480, "720p": 720 },
+          "map": {
+            "480p": 480,
+            "720p": 720
+          },
           "also": [
-            { "node": "4", "input": "height" },
-            { "node": "20", "input": "width" },
-            { "node": "20", "input": "height" },
-            { "node": "40", "input": "width" },
-            { "node": "40", "input": "height" }
+            {
+              "node": "4",
+              "input": "height"
+            },
+            {
+              "node": "20",
+              "input": "width"
+            },
+            {
+              "node": "20",
+              "input": "height"
+            },
+            {
+              "node": "40",
+              "input": "width"
+            },
+            {
+              "node": "40",
+              "input": "height"
+            }
           ]
         }
       },
       "promptTemplate": "Replace the product held in image 1 with the product shown in image 2. Keep the person's hands, fingers, pose, clothing, background, camera angle and lighting identical. Seat the new product naturally in the grip with matching perspective, contact shadows and reflections.{description}",
       "notes": "Source clip is LoadVideo. SKU photo is LoadImage. FLUX 3 edits the first frame. Wan 2.1 VACE inpaints the clip. Output is the SaveVideo node. workflow_api.json matches product-swap-wan-vace.json except it omits the keyframe SaveImage (node 27). The LTX graph and the batch studio are apps/open-product-swap. The carousel submits workflow_api.json.",
-      "output": { "node": "26", "media": "video" }
+      "output": {
+        "node": "26",
+        "media": "video"
+      }
     },
     "open-unboxing": {
       "title": "Open Unboxing",
@@ -171,15 +354,42 @@
       "partnerNodes": true,
       "pipeline": "unboxing",
       "imageInputs": {
-        "product": { "node": "1", "input": "image", "maxSide": 1280, "maxCount": 5 },
-        "empty": { "node": "9", "input": "image", "maxSide": 1600, "supplied": "preset-empty" },
-        "lid": { "node": "12", "input": "image", "maxSide": 1600, "supplied": "preset-lid" }
+        "product": {
+          "node": "1",
+          "input": "image",
+          "maxSide": 1280,
+          "maxCount": 5
+        },
+        "empty": {
+          "node": "9",
+          "input": "image",
+          "maxSide": 1600,
+          "supplied": "preset-empty"
+        },
+        "lid": {
+          "node": "12",
+          "input": "image",
+          "maxSide": 1600,
+          "supplied": "preset-lid"
+        }
       },
       "params": {
-        "seed": { "node": "11", "input": "seed", "also": [{ "node": "13", "input": "seed" }] }
+        "seed": {
+          "node": "11",
+          "input": "seed",
+          "also": [
+            {
+              "node": "13",
+              "input": "seed"
+            }
+          ]
+        }
       },
       "notes": "One graph: BiRefNet cutout, composite into the preset insert, FLUX 3 nested keyframe, LTX 2.5 first-last frame from the sealed lid, RIFE x2, SaveVideo. Extra product photos are FLUX reference images. Preset stills are uploaded on the server. releaseId in deployments.json is a placeholder. Upstream multi-step graphs, NODE_MAP, REPORT, and the studio live beside this file and under apps/open-unboxing. The carousel submits workflow_api.json.",
-      "output": { "node": "18", "media": "video" }
+      "output": {
+        "node": "18",
+        "media": "video"
+      }
     },
     "pumpkin-carve": {
       "title": "Pumpkin Carve",
@@ -189,18 +399,67 @@
       "cloudWorkflowName": "Pumpkin Carve",
       "partnerNodes": true,
       "imageInputs": {
-        "image": { "node": "10", "input": "image", "maxSide": 1536 }
+        "image": {
+          "node": "10",
+          "input": "image",
+          "maxSide": 1536
+        }
       },
       "params": {
         "seed": {
           "node": "30",
           "input": "seed",
-          "also": [ { "node": "40", "input": "seed" }, { "node": "32", "input": "seed" }, { "node": "20", "input": "model.seed" } ]
+          "also": [
+            {
+              "node": "40",
+              "input": "seed"
+            },
+            {
+              "node": "32",
+              "input": "seed"
+            },
+            {
+              "node": "20",
+              "input": "model.seed"
+            }
+          ]
         }
       },
       "promptTemplate": null,
       "notes": "Partner Recraft vectorize + Seedream 4.5 blank/carve stills + Kling 3.0 first-last-frame hyperlapse (720p, 8s, audio off); celebrity photos OK. Serverless COMFY_BASE_URL_PUMPKIN_CARVE + COMFY_API_KEY_TEAM.",
-      "output": { "node": "50", "media": "video" }
+      "output": {
+        "node": "50",
+        "media": "video"
+      }
+    },
+    "reverse-3d": {
+      "title": "Reverse 3D",
+      "enabled": true,
+      "workflow": "workflows/reverse-3d/workflow_api.json",
+      "cloudWorkflowId": "pending",
+      "cloudWorkflowName": "comfy-api-apps - Reverse 3D",
+      "partnerNodes": true,
+      "imageInputs": {},
+      "videoInputs": {
+        "video": {
+          "node": "10",
+          "input": "file",
+          "maxBytes": 4194304,
+          "maxSeconds": 18
+        }
+      },
+      "params": {
+        "seed": {
+          "node": "20",
+          "input": "model.seed"
+        }
+      },
+      "promptTemplate": null,
+      "notes": "Kling 4.0 Edit playblast-only. Side-by-side compare is built in the browser (playblast left, original right). Serverless COMFY_BASE_URL_REVERSE_3D + COMFY_API_KEY_TEAM. Max input 18s.",
+      "output": {
+        "node": "21",
+        "media": "video"
+      }
     }
   }
 }

@@ -147,6 +147,23 @@ const CHROME: Record<
     empty: "Upload an image to get started",
     images: [{ key: "image", label: "Input" }],
   },
+  "reverse-3d": {
+    icon: "cube",
+    name: "Reverse 3D",
+    tagline: "Turn a final shot into a blocky playblast",
+    runLabel: "Make playblast",
+    views: ["Playblast", "Compare"],
+    kind: "reverse-3d",
+    empty: "Upload a finished clip to get started",
+    images: [
+      {
+        key: "video",
+        label: "Final video",
+        accept: "video",
+        hint: "MP4, MOV, or WebM, up to 18 seconds. Clips over 4 MB are compressed in the browser before upload.",
+      },
+    ],
+  },
 };
 
 function labelOf(value: string): string {

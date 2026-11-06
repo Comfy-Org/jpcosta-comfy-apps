@@ -75,7 +75,9 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
         throw new AppError(
           400,
           "invalid_input",
-          "Upload a video of someone holding the product. MP4, MOV, or WebM, trimmed to 4 MB or less.",
+          appId === "reverse-3d"
+            ? "Upload a video. MP4, MOV, or WebM, 18 seconds or less."
+            : "Upload a video of someone holding the product. MP4, MOV, or WebM, trimmed to 4 MB or less.",
         );
       }
       incomingBytes += entry.size;

@@ -264,6 +264,12 @@ export async function renderMockOutput(outputId: string, grids: Record<string, s
     png = await renderTryOn(plate, await readRole(meta.id, "product"));
   } else if (meta.app === "pumpkin-carve") {
     png = await renderTryOn(await readRole(meta.id, "image"), await readRole(meta.id, "image"));
+  } else if (meta.app === "reverse-3d") {
+    png = await sharp({
+      create: { width: 64, height: 64, channels: 3, background: { r: 176, g: 176, b: 176 } },
+    })
+      .png()
+      .toBuffer();
   } else {
     throw new AppError(404, "not_found", "That output was not found.");
   }
