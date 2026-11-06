@@ -70,7 +70,7 @@ function even(value: number): number {
 
 async function recordRealtime(canvas: HTMLCanvasElement, duration: number, draw: () => boolean, bitsPerSecond: number): Promise<Blob> {
   const mime = pickRecorderMime();
-  const stream = canvas.captureStream(30);
+  const stream = canvas.captureStream(24);
   const recorder = mime
     ? new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitsPerSecond })
     : new MediaRecorder(stream, { videoBitsPerSecond: bitsPerSecond });
