@@ -56,7 +56,7 @@ const EXPECTED_ENDPOINTS: Record<string, string> = {
   "open-product-swap": "https://dep-c6eae195-e598-4f43-8928-00cb4aa3c2d7.run.comfy.app",
   "open-unboxing": "https://dep-727f285f-f3d8-4348-8378-eacd314ebb58.run.comfy.app",
   "pumpkin-carve": "https://dep-480af229-63d7-4022-9bdc-2dd20c2ffc9f.run.comfy.app",
-  "reverse-3d": "https://dep-aa908d9a-2522-4c07-af17-6ab7c5b842ef.run.comfy.app",
+  "reverse-3d": "https://dep-a166b403-62ba-4598-adeb-708471c20c8c.run.comfy.app",
 };
 
 const deploymentEnvNames = Object.keys(EXPECTED_ENDPOINTS).map(deploymentEnvName);

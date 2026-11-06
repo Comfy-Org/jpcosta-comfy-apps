@@ -111,6 +111,31 @@ async function playFromStart(video: HTMLVideoElement): Promise<void> {
   await video.play();
 }
 
+function estimateFrameDuration(video: HTMLVideoElement): number {
+  const duration = Number.isFinite(video.duration) ? video.duration : 0;
+  if (duration <= 0) return 1 / 24;
+  const errorFor = (fps: number) => Math.abs(duration * fps - Math.round(duration * fps));
+  return errorFor(24) <= errorFor(30) ? 1 / 24 : 1 / 30;
+}
+
+function seekTo(video: HTMLVideoElement, time: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const done = () => {
+      video.removeEventListener("seeked", done);
+      video.removeEventListener("error", failSeek);
+      resolve();
+    };
+    const failSeek = () => {
+      video.removeEventListener("seeked", done);
+      video.removeEventListener("error", failSeek);
+      reject(new Error("Could not read that video."));
+    };
+    video.addEventListener("seeked", done);
+    video.addEventListener("error", failSeek);
+    video.currentTime = Math.max(0, time);
+  });
+}
+
 export async function prepareReverse3dUpload(file: File): Promise<{ file: File; width: number; height: number; duration: number }> {
   const probe = await probeVideoFile(file);
   if (probe.duration <= 0 || probe.width <= 0 || probe.height <= 0) {
@@ -167,27 +192,32 @@ export async function composeSideBySide(playblastUrl: string, originalUrl: strin
     Number.isFinite(playblast.duration) ? playblast.duration : 0,
     Number.isFinite(original.duration) ? original.duration : 0,
   );
-  if (duration <= 0) fail("Could not build the comparison video.");
+  // Kling's first encoded frame is often smeared; drop it and the matching original frame.
+  const skip = Math.max(estimateFrameDuration(playblast), estimateFrameDuration(original));
+  if (duration <= skip) fail("Could not build the comparison video.");
   const height = even(Math.max(playblast.videoHeight || 0, original.videoHeight || 0, 2));
-  const leftW = even(((playblast.videoWidth || 1) / Math.max(playblast.videoHeight || 1, 1)) * height);
-  const rightW = even(((original.videoWidth || 1) / Math.max(original.videoHeight || 1, 1)) * height);
+  const leftW = even(((original.videoWidth || 1) / Math.max(original.videoHeight || 1, 1)) * height);
+  const rightW = even(((playblast.videoWidth || 1) / Math.max(playblast.videoHeight || 1, 1)) * height);
   const canvas = document.createElement("canvas");
   canvas.width = leftW + rightW;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx) fail("Could not build the comparison video.");
-  await playFromStart(playblast);
-  await playFromStart(original);
-  const bitrate = Math.max(800_000, Math.floor((6_000_000 * 8) / Math.max(duration, 1)));
+  await seekTo(playblast, skip);
+  await seekTo(original, skip);
+  await playblast.play();
+  await original.play();
+  const remaining = duration - skip;
+  const bitrate = Math.max(800_000, Math.floor((6_000_000 * 8) / Math.max(remaining, 1)));
   try {
     return await recordRealtime(
       canvas,
-      duration,
+      remaining,
       () => {
         ctx.fillStyle = "#111";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(playblast, 0, 0, leftW, height);
-        ctx.drawImage(original, leftW, 0, rightW, height);
+        ctx.drawImage(original, 0, 0, leftW, height);
+        ctx.drawImage(playblast, leftW, 0, rightW, height);
         return !playblast.ended && playblast.currentTime < duration;
       },
       bitrate,

@@ -455,7 +455,7 @@
         }
       },
       "promptTemplate": null,
-      "notes": "Kling 4.0 Edit playblast-only. Side-by-side compare is built in the browser (playblast left, original right). Serverless COMFY_BASE_URL_REVERSE_3D + COMFY_API_KEY_TEAM. Max input 18s.",
+      "notes": "Kling 4.0 Edit playblast-only. Side-by-side compare is built in the browser (original left, playblast right). Serverless COMFY_BASE_URL_REVERSE_3D + COMFY_API_KEY_TEAM. Max input 18s.",
       "output": {
         "node": "21",
         "media": "video"
