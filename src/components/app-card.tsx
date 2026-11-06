@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BackgroundValue, FormatValue } from "@/lib/choices";
 import { downloadBlob, exportCutout } from "@/lib/composite";
-import { FORM_BUDGET_BYTES, VIDEO_FORM_BUDGET_BYTES, imageRejectReason, packImages, randomSeed, shrinkForUpload, videoRejectReason } from "@/lib/prepare-image";
+import { FORM_BUDGET_BYTES, VIDEO_FORM_BUDGET_BYTES, imageRejectReason, packImages, randomSeed, shrinkForUpload, videoRejectReason, videoTypeRejectReason } from "@/lib/prepare-image";
+import { composeSideBySide, prepareReverse3dUpload } from "@/lib/video-client";
 import { LILAC, TERMINAL_STATUSES, type CatalogApp, type CatalogImage, type JobView, type RunResponse, type TextControl } from "@/lib/types";
 import { AppIcon } from "@/components/app-icon";
 
@@ -38,6 +39,8 @@ type HistoryItem = {
   width: number;
   height: number;
   video: boolean;
+  compareBlob?: Blob;
+  compareUrl?: string;
 };
 
 type Phase = "idle" | "queued" | "running" | "done" | "error";
@@ -194,6 +197,31 @@ export function AppCard({ app }: { app: CatalogApp }) {
     try {
       if (spec?.accept === "video") {
         const file = incoming[0];
+        if (app.kind === "reverse-3d") {
+          const reason = file ? videoTypeRejectReason(file) : "Upload a video.";
+          if (reason || !file) {
+            setNeed(reason);
+            return;
+          }
+          setNeed("Checking the clip…");
+          const prepared = await prepareReverse3dUpload(file);
+          setNeed(null);
+          setUploads((current) => {
+            revokeUpload(current[role]);
+            return {
+              ...current,
+              [role]: {
+                file: prepared.file,
+                source: file,
+                url: URL.createObjectURL(prepared.file),
+                name: file.name,
+                width: prepared.width,
+                height: prepared.height,
+              },
+            };
+          });
+          return;
+        }
         const reason = file ? videoRejectReason(file) : "Upload a video.";
         if (reason || !file) {
           setNeed(reason);
@@ -281,6 +309,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
         if (app.kind === "product-swap") return "Upload a clip and a product photo.";
         if (app.kind === "unboxing") return "Add at least one product photo.";
         if (app.kind === "carve") return "Upload an image to carve.";
+        if (app.kind === "reverse-3d") return "Upload a finished clip.";
         return "Upload an image first.";
       }
     }
@@ -325,6 +354,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
       return label || "Box";
     }
     if (app.kind === "carve") return "9:16 timelapse";
+    if (app.kind === "reverse-3d") return "Blocky playblast";
     if (app.kind === "paparazzi") {
       const name = controlValue(next, "celebrity").trim();
       const resolution = controlValue(next, "resolution") || "2K";
@@ -443,6 +473,16 @@ export function AppCard({ app }: { app: CatalogApp }) {
         height: dims.height,
         video,
       };
+      const originalUrl = before.video;
+      if (app.kind === "reverse-3d" && video && originalUrl) {
+        try {
+          const compareBlob = await composeSideBySide(url, originalUrl);
+          item.compareBlob = compareBlob;
+          item.compareUrl = URL.createObjectURL(compareBlob);
+        } catch {
+          // Playblast still stands; compare download stays unavailable.
+        }
+      }
       setHistory((current) => [...current, item].slice(-5));
       setActiveId(item.id);
       setView(0);
@@ -483,6 +523,20 @@ export function AppCard({ app }: { app: CatalogApp }) {
           : type.includes("webp")
             ? "webp"
             : "png";
+      if (app.kind === "reverse-3d") {
+        if (view === 1 && active.compareBlob) {
+          const compareType = active.compareBlob.type;
+          const compareExt = compareType.includes("mp4") ? "mp4" : "webm";
+          const filename = `${app.id}-compare.${compareExt}`;
+          downloadBlob(active.compareBlob, filename);
+          setToast(filename);
+          return;
+        }
+        const filename = `${app.id}-playblast.${ext}`;
+        downloadBlob(active.blob, filename);
+        setToast(filename);
+        return;
+      }
       const filename = `${app.id}.${ext}`;
       downloadBlob(active.blob, filename);
       setToast(filename);
@@ -504,7 +558,8 @@ export function AppCard({ app }: { app: CatalogApp }) {
   const primaryKey = app.images[0]?.key;
   const primaryUpload = primaryKey ? uploads[primaryKey] : undefined;
   const beforeUrl = (primaryKey && active?.before[primaryKey]) || "";
-  const showCompare = view === 1 && app.views[1] === "Compare" && active && beforeUrl;
+  const showCompare = view === 1 && app.views[1] === "Compare" && active && beforeUrl && app.kind !== "reverse-3d";
+  const showVideoCompare = view === 1 && app.kind === "reverse-3d" && active;
   const showSprite = view === 1 && app.kind === "sprite" && active;
   const grid = app.grids?.[active?.frames || Object.keys(app.grids ?? {})[0] || "8"] ?? { cols: 4, rows: 2 };
 
@@ -752,8 +807,24 @@ export function AppCard({ app }: { app: CatalogApp }) {
             </button>
             <button className="btn dark" type="button" disabled={!active} onClick={() => void onDownload()}>
               <span className="arrow" aria-hidden="true">↓</span>
-              Download
+              {app.kind === "reverse-3d" && view === 1 ? "Download compare" : app.kind === "reverse-3d" ? "Download playblast" : "Download"}
             </button>
+            {app.kind === "reverse-3d" && active?.compareBlob && view === 0 ? (
+              <button
+                className="btn"
+                type="button"
+                onClick={() => {
+                  const compareType = active.compareBlob?.type ?? "";
+                  const compareExt = compareType.includes("mp4") ? "mp4" : "webm";
+                  const filename = `${app.id}-compare.${compareExt}`;
+                  downloadBlob(active.compareBlob!, filename);
+                  setToast(filename);
+                }}
+              >
+                <span className="arrow" aria-hidden="true">↓</span>
+                Download compare
+              </button>
+            ) : null}
           </div>
           <div className={`preview ${checker ? "checker" : ""}`} ref={previewRef} style={stageStyle}>
             {!active && !app.images.some((image) => uploads[image.key]) && !selectedScene ? (
@@ -762,9 +833,18 @@ export function AppCard({ app }: { app: CatalogApp }) {
                 {app.empty}
               </div>
             ) : null}
-            {active && !showCompare && !showSprite ? (
+            {active && !showCompare && !showSprite && !showVideoCompare ? (
               <div className="shot-wrap">
                 <ResultMedia url={active.url} video={active.video} alt={`${app.name} result`} />
+              </div>
+            ) : null}
+            {showVideoCompare && active ? (
+              <div className="shot-wrap">
+                <ResultMedia
+                  url={active.compareUrl ?? active.url}
+                  video
+                  alt={active.compareUrl ? "Playblast versus original" : `${app.name} playblast`}
+                />
               </div>
             ) : null}
             {!active && primaryUpload ? (

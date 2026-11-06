@@ -106,7 +106,7 @@ export type CatalogApp = {
   runLabel: string;
   endpoint: string;
   views: string[];
-  kind: "relight" | "upscale" | "sprite" | "tryon" | "cutout" | "swap" | "paparazzi" | "product-swap" | "unboxing" | "carve";
+  kind: "relight" | "upscale" | "sprite" | "tryon" | "cutout" | "swap" | "paparazzi" | "product-swap" | "unboxing" | "carve" | "reverse-3d";
   images: CatalogImage[];
   controls: ClientControl[];
   hasSeed: boolean;

@@ -188,7 +188,13 @@ export function buildJobBody(
 
   for (const [role, spec] of Object.entries(app.videoInputs ?? {})) {
     const asset = assets[role];
-    if (!asset) throw new AppError(400, "invalid_input", "Upload a video of someone holding the product.");
+    if (!asset) {
+      throw new AppError(
+        400,
+        "invalid_input",
+        app.title === "Reverse 3D" ? "Upload a video." : "Upload a video of someone holding the product.",
+      );
+    }
     const node = workflow[spec.node];
     if (!node) throw new AppError(500, "internal", `Workflow is missing node ${spec.node}.`);
     node.inputs[spec.input] = assetRef(asset.id, asset.filePath);

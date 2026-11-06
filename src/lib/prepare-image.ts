@@ -6,12 +6,18 @@ export const FORM_BUDGET_BYTES = 3_800_000;
 /** A 4 MB clip plus a small product photo, still under the 4.5 MB request cap. */
 export const VIDEO_FORM_BUDGET_BYTES = 4_480_000;
 
-export function videoRejectReason(file: File): string | null {
+export function videoTypeRejectReason(file: File): string | null {
   const type = file.type.toLowerCase();
   const named = /\.(mp4|mov|webm)$/i.test(file.name);
   const typed = type === "video/mp4" || type === "video/quicktime" || type === "video/webm" || type === "video/mov";
   if (!named && !typed) return "Use an MP4, MOV, or WebM video.";
   if (file.size <= 0) return "That video is empty.";
+  return null;
+}
+
+export function videoRejectReason(file: File): string | null {
+  const typed = videoTypeRejectReason(file);
+  if (typed) return typed;
   if (file.size > VIDEO_MAX_BYTES) {
     return "That video is over 4 MB. Trim it and try again. Uploads have to stay under about 4.5 MB.";
   }
