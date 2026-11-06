@@ -178,7 +178,9 @@ export async function prepareReverse3dUpload(file: File): Promise<{ file: File; 
       fail("That video is still over 4 MB after compressing. Try a shorter or smaller clip.");
     }
     const mime = blob.type || "video/webm";
-    const prepared = new File([blob], `input.${extensionForMime(mime)}`, { type: mime });
+    // MediaRecorder often sets "video/webm;codecs=vp9"; the API used to reject that exact string.
+    const cleanType = extensionForMime(mime) === "mp4" ? "video/mp4" : "video/webm";
+    const prepared = new File([blob], `input.${extensionForMime(mime)}`, { type: cleanType });
     return { file: prepared, width, height, duration: probe.duration };
   } finally {
     URL.revokeObjectURL(srcUrl);

@@ -35,6 +35,8 @@ import {
 } from "../src/lib/paparazzi-search";
 import { easeSlide, exitOpacity, trackGap } from "../src/lib/ease-slide";
 import { readSceneChoice, signSceneChoice } from "../src/lib/scene-token";
+import { isAllowedVideoMime } from "../src/lib/media";
+import { videoTypeRejectReason } from "../src/lib/prepare-image";
 import { buildJobBody, redactJobBody } from "../src/lib/workflow";
 
 process.chdir(path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."));
@@ -194,6 +196,11 @@ assert.equal(getApp("reverse-3d")?.output.node, "21");
 assert.equal(getApp("reverse-3d")?.output.media, "video");
 assert.equal(getApp("reverse-3d")?.videoInputs?.video.node, "10");
 assert.equal(getApp("reverse-3d")?.videoInputs?.video.maxSeconds, 18);
+assert.equal(isAllowedVideoMime("video/webm;codecs=vp9"), true);
+assert.equal(isAllowedVideoMime("video/mp4;codecs=avc1.42E01E"), true);
+assert.equal(isAllowedVideoMime("video/webm"), true);
+assert.equal(isAllowedVideoMime("image/png"), false);
+assert.equal(videoTypeRejectReason(new File([new Uint8Array([1])], "clip.webm", { type: "video/webm;codecs=vp8" })), null);
 assert.equal(getDeployment("open-product-swap")?.keyEnv, "COMFY_API_KEY_WORK_PERSONAL");
 assert.equal(getDeployment("open-unboxing")?.keyEnv, "COMFY_API_KEY_WORK_PERSONAL");
 assert.equal(getDeployment("pumpkin-carve")?.keyEnv, "COMFY_API_KEY_TEAM");
