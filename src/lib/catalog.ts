@@ -160,7 +160,7 @@ const CHROME: Record<
         key: "video",
         label: "Final video",
         accept: "video",
-        hint: "MP4, MOV, or WebM, up to 18 seconds. Clips over 4 MB are compressed in the browser before upload.",
+        hint: "MP4, MOV, or WebM, 3 to 18 seconds. Longer clips use the first 18 seconds. Clips over 4 MB are resampled to 24 fps in the browser.",
       },
     ],
   },

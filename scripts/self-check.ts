@@ -36,6 +36,7 @@ import {
 import { easeSlide, exitOpacity, trackGap } from "../src/lib/ease-slide";
 import { readSceneChoice, signSceneChoice } from "../src/lib/scene-token";
 import { isAllowedVideoMime } from "../src/lib/media";
+import { REVERSE_3D_MAX_SECONDS, REVERSE_3D_MIN_SECONDS } from "../src/lib/video-client";
 import { videoTypeRejectReason } from "../src/lib/prepare-image";
 import { buildJobBody, redactJobBody } from "../src/lib/workflow";
 
@@ -196,6 +197,8 @@ assert.equal(getApp("reverse-3d")?.output.node, "21");
 assert.equal(getApp("reverse-3d")?.output.media, "video");
 assert.equal(getApp("reverse-3d")?.videoInputs?.video.node, "10");
 assert.equal(getApp("reverse-3d")?.videoInputs?.video.maxSeconds, 18);
+assert.equal(REVERSE_3D_MAX_SECONDS, 18);
+assert.equal(REVERSE_3D_MIN_SECONDS, 3);
 assert.equal(isAllowedVideoMime("video/webm;codecs=vp9"), true);
 assert.equal(isAllowedVideoMime("video/mp4;codecs=avc1.42E01E"), true);
 assert.equal(isAllowedVideoMime("video/webm"), true);
