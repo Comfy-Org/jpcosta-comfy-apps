@@ -8,15 +8,43 @@
       "title": "Input Final Video"
     }
   },
+  "15": {
+    "class_type": "GetVideoComponents",
+    "inputs": {
+      "video": [
+        "10",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Split frames"
+    }
+  },
+  "16": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": [
+        "15",
+        0
+      ],
+      "fps": 24,
+      "codec": "h264",
+      "color_space": "sRGB",
+      "bit_depth": "auto"
+    },
+    "_meta": {
+      "title": "Pack constant 24 fps"
+    }
+  },
   "20": {
     "class_type": "Kling4EditVideoNode",
     "inputs": {
       "model": "kling-4.0",
       "model.video_1": [
-        "10",
+        "16",
         0
       ],
-      "model.prompt": "Restyle @Video1 as an ultra-simple Blender solid-viewport playblast, almost everything made of primitive blocks. EVERY person or character MUST become a primitive-box mannequin: a perfect light-grey CUBE for the head, with a totally flat face of two small black square eyes, one small grey square nose, and a thin short black line for a mouth. No ears, no hair, no eyebrows, no real human face, no likeness of the original person. The body is ONE plain light-grey rectangular box, like a fridge standing on end \u2014 no clothing, no armor, no cape, no logos, no folds, no muscles, no costume colors. If arms or legs are needed they are only short grey boxes or cylinders with no hands, fingers, boots or detail. Any held prop becomes a simple grey or flat-colored box or cylinder. Environment: very simple untextured primitives with flat solid colors \u2014 big boxes for buildings, flat planes for ground and water, a flat sky, chunky untextured colored stand-ins for structures. No windows, no text, no textures, no photos, no reflections, no cinematic lighting. Keep the exact same camera move, framing, character positions, character count and timing as @Video1. Do not add new action.",
+      "model.prompt": "Restyle @Video1 as an ultra-simple Blender solid-viewport playblast, almost everything made of primitive blocks. EVERY person or character MUST become a primitive-box mannequin: a perfect light-grey CUBE for the head, with a totally flat face of two small black square eyes, one small grey square nose, and a thin short black line for a mouth. No ears, no hair, no eyebrows, no real human face, no likeness of the original person. The body is ONE plain light-grey rectangular box, like a fridge standing on end — no clothing, no armor, no cape, no logos, no folds, no muscles, no costume colors. If arms or legs are needed they are only short grey boxes or cylinders with no hands, fingers, boots or detail. Any held prop becomes a simple grey or flat-colored box or cylinder. Environment: very simple untextured primitives with flat solid colors — big boxes for buildings, flat planes for ground and water, a flat sky, chunky untextured colored stand-ins for structures. No windows, no text, no textures, no photos, no reflections, no cinematic lighting. Keep the exact same camera move, framing, character positions, character count and timing as @Video1. Do not add new action.",
       "model.resolution": "720p",
       "model.aspect_ratio": "adaptive",
       "model.seed": 42

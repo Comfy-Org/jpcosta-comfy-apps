@@ -560,8 +560,13 @@ assert.deepEqual(reverseJob.workflow["10"].inputs.file, {
   __type: "core/ASSET",
   info: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", file_path: "input.mp4" },
 });
+assert.equal(reverseJob.workflow["15"].class_type, "GetVideoComponents");
+assert.deepEqual(reverseJob.workflow["15"].inputs.video, ["10", 0]);
+assert.equal(reverseJob.workflow["16"].class_type, "CreateVideo");
+assert.equal(reverseJob.workflow["16"].inputs.fps, 24);
+assert.deepEqual(reverseJob.workflow["16"].inputs.images, ["15", 0]);
 assert.equal(reverseJob.workflow["20"].class_type, "Kling4EditVideoNode");
-assert.deepEqual(reverseJob.workflow["20"].inputs["model.video_1"], ["10", 0]);
+assert.deepEqual(reverseJob.workflow["20"].inputs["model.video_1"], ["16", 0]);
 assert.equal(reverseJob.workflow["20"].inputs["model.seed"], 42);
 assert.equal(reverseJob.workflow["21"].class_type, "SaveVideo");
 assert.equal(reverseJob.extra_data?.api_key_comfy_org, "team-key");
