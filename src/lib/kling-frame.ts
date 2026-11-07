@@ -138,31 +138,79 @@ const VISUAL_SAMPLE = new Set([
   "dvhe",
 ]);
 
-function readStsdSize(buf: Buffer, offset: number, end: number, inSample: boolean): { width: number; height: number } | null {
-  let cursor = offset;
-  while (cursor + 8 <= end) {
-    const box = boxSize(buf, cursor);
-    if (!box || cursor + box.size > end) return null;
-    const type = buf.toString("latin1", cursor + 4, cursor + 8);
-    const start = cursor + box.header;
-    const boxEnd = cursor + box.size;
-    if (inSample && VISUAL_SAMPLE.has(type) && cursor + 36 <= buf.length) {
-      const width = buf.readUInt16BE(cursor + 32);
-      const height = buf.readUInt16BE(cursor + 34);
-      if (width >= 2 && height >= 2 && width <= 16384 && height <= 16384) return { width, height };
-    } else if (type === "stsd" && start + 8 <= boxEnd) {
-      const entry = readStsdSize(buf, start + 8, boxEnd, true);
-      if (entry) return entry;
-    } else if (!inSample && (type === "moov" || type === "trak" || type === "mdia" || type === "minf" || type === "stbl")) {
-      const entry = readStsdSize(buf, start, boxEnd, false);
-      if (entry) return entry;
-    }
-    cursor = boxEnd;
-  }
+const ISO_PARENT = new Set(["moov", "trak", "mdia", "minf", "stbl"]);
+
+/**
+ * 90° and 270° display matrices. LoadVideo (Comfy `VideoFromFile.get_components`)
+ * applies `np.rot90` for an odd rotation quadrant, which swaps the decoded frame.
+ * The coded sample size stays unrotated, so the fit canvas has to follow the
+ * decoded orientation or ResizeAndPadImage letterboxes the long way.
+ */
+function matrixSwapsAxes(a: number, b: number, c: number, d: number): boolean {
+  const scale = 65536;
+  return Math.abs(a) < scale / 2 && Math.abs(d) < scale / 2 && Math.abs(b) > scale / 2 && Math.abs(c) > scale / 2;
+}
+
+function readTkhdSwap(buf: Buffer, content: number, end: number): boolean {
+  if (content >= end) return false;
+  const version = buf[content] ?? 0;
+  const matrix = content + (version === 1 ? 52 : 40);
+  if (matrix + 20 > end) return false;
+  const a = buf.readInt32BE(matrix);
+  const b = buf.readInt32BE(matrix + 4);
+  const c = buf.readInt32BE(matrix + 12);
+  const d = buf.readInt32BE(matrix + 16);
+  return matrixSwapsAxes(a, b, c, d);
+}
+
+function readVisualSample(buf: Buffer, cursor: number): { width: number; height: number } | null {
+  if (cursor + 36 > buf.length) return null;
+  const width = buf.readUInt16BE(cursor + 32);
+  const height = buf.readUInt16BE(cursor + 34);
+  if (width >= 2 && height >= 2 && width <= 16384 && height <= 16384) return { width, height };
   return null;
 }
 
-function vint(buf: Buffer, offset: number): { value: number; length: number } | null {
+function readIsoVideoSize(buf: Buffer): { width: number; height: number } | null {
+  let found: { width: number; height: number } | null = null;
+  function walk(offset: number, end: number, inSample: boolean, handler: string | null, swap: boolean): void {
+    let cursor = offset;
+    while (cursor + 8 <= end) {
+      const box = boxSize(buf, cursor);
+      if (!box || cursor + box.size > end) return;
+      const type = buf.toString("latin1", cursor + 4, cursor + 8);
+      const content = cursor + box.header;
+      const boxEnd = cursor + box.size;
+      if (type === "trak") {
+        walk(content, boxEnd, false, null, false);
+      } else if (type === "tkhd") {
+        swap = readTkhdSwap(buf, content, boxEnd);
+      } else if (type === "hdlr" && content + 12 <= boxEnd) {
+        const next = buf.toString("latin1", content + 8, content + 12);
+        if (next === "vide" || next === "soun") handler = next;
+      } else if (type === "stsd" && content + 8 <= boxEnd) {
+        walk(content + 8, boxEnd, true, handler, swap);
+      } else if (inSample && VISUAL_SAMPLE.has(type) && (handler === "vide" || handler === null)) {
+        const sample = readVisualSample(buf, cursor);
+        if (sample && !found) {
+          found = swap ? { width: sample.height, height: sample.width } : sample;
+        }
+      } else if (!inSample && ISO_PARENT.has(type)) {
+        walk(content, boxEnd, false, handler, swap);
+      }
+      cursor = boxEnd;
+    }
+  }
+  walk(0, buf.length, false, null, false);
+  return found;
+}
+
+/**
+ * EBML element size. Unknown length is every *data* bit set, per VINT width.
+ * An 8-byte unknown size is `01 FF FF FF FF FF FF FF`: the marker fills the
+ * first byte, so a raw "all bytes are 0xFF" check misses Chrome MediaRecorder.
+ */
+function readEbmlVint(buf: Buffer, offset: number): { length: number; data: bigint; unknown: boolean } | null {
   if (offset >= buf.length) return null;
   const marker = buf[offset] ?? 0;
   let mask = 0x80;
@@ -172,9 +220,19 @@ function vint(buf: Buffer, offset: number): { value: number; length: number } | 
     length += 1;
   }
   if (length > 8 || offset + length > buf.length) return null;
-  let value = marker & (mask - 1);
-  for (let index = 1; index < length; index += 1) value = value * 256 + (buf[offset + index] ?? 0);
-  return { value, length };
+  let data = BigInt(marker & ((mask - 1) & 0xff));
+  for (let index = 1; index < length; index += 1) data = (data << 8n) + BigInt(buf[offset + index] ?? 0);
+  const width = 7n * BigInt(length);
+  const unknown = data === (1n << width) - 1n;
+  return { length, data, unknown };
+}
+
+function readEbmlId(buf: Buffer, offset: number): { value: number; length: number } | null {
+  const sized = readEbmlVint(buf, offset);
+  if (!sized) return null;
+  let value = 0;
+  for (let index = 0; index < sized.length; index += 1) value = value * 256 + (buf[offset + index] ?? 0);
+  return { value, length: sized.length };
 }
 
 const WEBM_MASTER = new Set([
@@ -187,51 +245,49 @@ const WEBM_MASTER = new Set([
   0xe0, // Video
 ]);
 
-function readWebmId(buf: Buffer, offset: number): { value: number; length: number } | null {
-  const sized = vint(buf, offset);
-  if (!sized) return null;
-  let value = 0;
-  for (let index = 0; index < sized.length; index += 1) value = value * 256 + (buf[offset + index] ?? 0);
-  return { value, length: sized.length };
-}
-
 function readWebmSize(buf: Buffer): { width: number; height: number } | null {
   const limit = Math.min(buf.length, 1_500_000);
   let width = 0;
   let height = 0;
   function walk(offset: number, end: number): boolean {
     while (offset + 2 <= end) {
-      const id = readWebmId(buf, offset);
-      const size = vint(buf, offset + (id?.length ?? 0));
-      if (!id || !size) return false;
+      const id = readEbmlId(buf, offset);
+      if (!id) return false;
+      const size = readEbmlVint(buf, offset + id.length);
+      if (!size) return false;
       const data = offset + id.length + size.length;
-      const rawSize = buf.subarray(offset + id.length, data);
-      const allOnes = rawSize.length > 0 && [...rawSize].every((byte) => byte === 0xff);
-      const childEnd = allOnes ? end : data + size.value;
-      if (childEnd < data || childEnd > end + 8) return false;
-      const bounded = Math.min(childEnd, limit);
-      if (id.value === 0xb0 && size.value >= 1 && size.value <= 4 && data + size.value <= buf.length) {
-        width = buf.readUIntBE(data, size.value);
-      } else if (id.value === 0xba && size.value >= 1 && size.value <= 4 && data + size.value <= buf.length) {
-        height = buf.readUIntBE(data, size.value);
+      let childEnd = end;
+      if (!size.unknown) {
+        if (size.data > BigInt(end - data)) return false;
+        childEnd = data + Number(size.data);
+      }
+      if (childEnd < data || childEnd > end) return false;
+      if (id.value === 0xb0 && size.data >= 1n && size.data <= 4n && data + Number(size.data) <= buf.length) {
+        width = buf.readUIntBE(data, Number(size.data));
+      } else if (id.value === 0xba && size.data >= 1n && size.data <= 4n && data + Number(size.data) <= buf.length) {
+        height = buf.readUIntBE(data, Number(size.data));
       } else if (WEBM_MASTER.has(id.value)) {
-        if (walk(data, bounded)) return true;
+        if (walk(data, Math.min(childEnd, limit))) return true;
       }
       if (width >= 2 && height >= 2) return true;
-      if (allOnes) break;
+      if (size.unknown) break;
       offset = childEnd;
     }
     return width >= 2 && height >= 2;
   }
-  walk(0, limit);
+  if (!walk(0, limit)) return null;
   if (width >= 2 && height >= 2 && width <= 16384 && height <= 16384) return { width, height };
   return null;
 }
 
-/** Coded frame size for the MP4, MOV, and WebM files this app accepts. */
+/**
+ * Frame size LoadVideo will decode. MP4/MOV sample dimensions are swapped when
+ * the track matrix is 90° or 270°. WebM uses PixelWidth and PixelHeight, and
+ * an unknown-length Segment does not reject the file.
+ */
 export function readVideoPixelSize(buf: Buffer): { width: number; height: number } | null {
   if (buf.length >= 12 && buf.toString("latin1", 4, 8) === "ftyp") {
-    return readStsdSize(buf, 0, buf.length, false);
+    return readIsoVideoSize(buf);
   }
   if (buf.length >= 4 && buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) {
     return readWebmSize(buf);

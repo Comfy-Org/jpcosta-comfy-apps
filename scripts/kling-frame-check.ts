@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getApp } from "../src/lib/config";
 import {
   KLING_FRAME_MAX_PIXELS,
@@ -137,7 +138,87 @@ function main() {
     if (sample.width === 720 && sample.height === 406) assert.deepEqual({ width: frame.width, height: frame.height }, { width: 1242, height: 700 });
   }
 
+  const chrome = readVideoPixelSize(
+    readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/chrome-media-recorder-720x406.webm")),
+  );
+  assert.deepEqual(chrome, { width: 720, height: 406 });
+  const chromeFrame = fitKlingFrame(chrome?.width ?? 0, chrome?.height ?? 0);
+  assert.deepEqual({ width: chromeFrame.width, height: chromeFrame.height }, { width: 1242, height: 700 });
+
+  assert.deepEqual(readVideoPixelSize(unknownSegmentWebm(720, 406)), { width: 720, height: 406 });
+  assert.deepEqual(readVideoPixelSize(finiteSegmentWebm(640, 360)), { width: 640, height: 360 });
+  assert.equal(readVideoPixelSize(Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x01])), null);
+  assert.equal(readVideoPixelSize(Buffer.alloc(32, 0xff)), null);
+  assert.equal(readVideoPixelSize(unknownSegmentWebm(720, 406).subarray(0, 12)), null);
+  assert.equal(readVideoPixelSize(Buffer.concat([ebmlHeader(), Buffer.from([0x18, 0x53, 0x80, 0x67])])), null);
+
+  const codedPath = path.join(dir, "coded.mp4");
+  execFileSync(
+    "ffmpeg",
+    ["-y", "-f", "lavfi", "-i", "color=c=red:s=1280x720:r=24", "-frames:v", "2", "-c:v", "libx264", "-pix_fmt", "yuv420p", codedPath],
+    { stdio: "ignore" },
+  );
+  const coded = readFileSync(codedPath);
+  assert.deepEqual(readVideoPixelSize(coded), { width: 1280, height: 720 });
+  const turned = writeDisplayMatrix(coded, 0, 65536, -65536, 0);
+  assert.deepEqual(readVideoPixelSize(turned), { width: 720, height: 1280 });
+  const turnedFrame = fitKlingFrame(720, 1280);
+  assert.deepEqual(
+    { width: turnedFrame.width, height: turnedFrame.height, padded: turnedFrame.padded },
+    { width: 720, height: 1280, padded: false },
+  );
+  const half = writeDisplayMatrix(coded, -65536, 0, 0, -65536);
+  assert.deepEqual(readVideoPixelSize(half), { width: 1280, height: 720 });
+
   console.log("kling-frame-check ok");
+}
+
+function ebmlHeader(): Buffer {
+  return Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x80]);
+}
+
+function sizeVint(value: number): Buffer {
+  if (value < 127) return Buffer.from([0x80 | value]);
+  return Buffer.from([0x40 | (value >> 8), value & 0xff]);
+}
+
+function element(id: Buffer, data: Buffer): Buffer {
+  return Buffer.concat([id, sizeVint(data.length), data]);
+}
+
+function videoTrack(width: number, height: number): Buffer {
+  const dims = Buffer.from([0xb0, 0x82, (width >> 8) & 0xff, width & 0xff, 0xba, 0x82, (height >> 8) & 0xff, height & 0xff]);
+  const video = element(Buffer.from([0xe0]), dims);
+  const entry = element(Buffer.from([0xae]), video);
+  return element(Buffer.from([0x16, 0x54, 0xae, 0x6b]), entry);
+}
+
+function unknownSegmentWebm(width: number, height: number): Buffer {
+  return Buffer.concat([
+    ebmlHeader(),
+    Buffer.from([0x18, 0x53, 0x80, 0x67, 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+    videoTrack(width, height),
+  ]);
+}
+
+function finiteSegmentWebm(width: number, height: number): Buffer {
+  const tracks = videoTrack(width, height);
+  return Buffer.concat([ebmlHeader(), element(Buffer.from([0x18, 0x53, 0x80, 0x67]), tracks)]);
+}
+
+function writeDisplayMatrix(mp4: Buffer, a: number, b: number, c: number, d: number): Buffer {
+  const copy = Buffer.from(mp4);
+  const typeAt = copy.indexOf("tkhd");
+  if (typeAt < 4) throw new Error("tkhd missing");
+  const start = typeAt - 4;
+  const version = copy[start + 8] ?? 0;
+  const matrix = start + 8 + (version === 1 ? 52 : 40);
+  copy.writeInt32BE(a, matrix);
+  copy.writeInt32BE(b, matrix + 4);
+  copy.writeInt32BE(0, matrix + 8);
+  copy.writeInt32BE(c, matrix + 12);
+  copy.writeInt32BE(d, matrix + 16);
+  return copy;
 }
 
 main();
