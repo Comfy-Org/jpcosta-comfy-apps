@@ -20,12 +20,32 @@
       "title": "Split frames"
     }
   },
+  "17": {
+    "class_type": "ResizeAndPadImage",
+    "inputs": {
+      "image": [
+        "15",
+        0
+      ],
+      "target_width": 1280,
+      "target_height": 720,
+      "padding_color": "black",
+      "interpolation": "lanczos"
+    },
+    "_meta": {
+      "title": "Fit Kling frame"
+    }
+  },
   "16": {
     "class_type": "CreateVideo",
     "inputs": {
       "images": [
-        "15",
+        "17",
         0
+      ],
+      "audio": [
+        "15",
+        1
       ],
       "fps": 24,
       "codec": "h264",
