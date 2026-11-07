@@ -245,37 +245,45 @@ const WEBM_MASTER = new Set([
   0xe0, // Video
 ]);
 
+/** How far to look for PixelWidth/PixelHeight. This is not the end of the file. */
+export const WEBM_HEADER_SCAN_BYTES = 1_500_000;
+
 function readWebmSize(buf: Buffer): { width: number; height: number } | null {
-  const limit = Math.min(buf.length, 1_500_000);
+  const scanEnd = Math.min(buf.length, WEBM_HEADER_SCAN_BYTES);
   let width = 0;
   let height = 0;
-  function walk(offset: number, end: number): boolean {
-    while (offset + 2 <= end) {
+  // `containerEnd` is the parent element's real end (the file, for the top call).
+  // A finite Segment larger than the scan budget is still valid; only a size past
+  // that real end is truncated. Cluster bytes after the budget are not read.
+  function walk(offset: number, containerEnd: number): boolean {
+    const lookEnd = Math.min(containerEnd, scanEnd);
+    while (offset + 2 <= lookEnd) {
       const id = readEbmlId(buf, offset);
       if (!id) return false;
       const size = readEbmlVint(buf, offset + id.length);
       if (!size) return false;
       const data = offset + id.length + size.length;
-      let childEnd = end;
+      let childEnd = containerEnd;
       if (!size.unknown) {
-        if (size.data > BigInt(end - data)) return false;
+        if (data > containerEnd || size.data > BigInt(containerEnd - data)) return false;
         childEnd = data + Number(size.data);
       }
-      if (childEnd < data || childEnd > end) return false;
-      if (id.value === 0xb0 && size.data >= 1n && size.data <= 4n && data + Number(size.data) <= buf.length) {
+      if (childEnd < data || childEnd > containerEnd) return false;
+      const payloadEnd = data + Number(size.data);
+      if (id.value === 0xb0 && size.data >= 1n && size.data <= 4n && payloadEnd <= buf.length) {
         width = buf.readUIntBE(data, Number(size.data));
-      } else if (id.value === 0xba && size.data >= 1n && size.data <= 4n && data + Number(size.data) <= buf.length) {
+      } else if (id.value === 0xba && size.data >= 1n && size.data <= 4n && payloadEnd <= buf.length) {
         height = buf.readUIntBE(data, Number(size.data));
-      } else if (WEBM_MASTER.has(id.value)) {
-        if (walk(data, Math.min(childEnd, limit))) return true;
+      } else if (WEBM_MASTER.has(id.value) && data < lookEnd) {
+        if (walk(data, childEnd)) return true;
       }
       if (width >= 2 && height >= 2) return true;
-      if (size.unknown) break;
+      if (size.unknown || childEnd > lookEnd) break;
       offset = childEnd;
     }
     return width >= 2 && height >= 2;
   }
-  if (!walk(0, limit)) return null;
+  if (!walk(0, buf.length)) return null;
   if (width >= 2 && height >= 2 && width <= 16384 && height <= 16384) return { width, height };
   return null;
 }

@@ -11,6 +11,7 @@ import {
   KLING_MAX_ASPECT,
   KLING_MIN_ASPECT,
   KLING_MIN_SIDE,
+  WEBM_HEADER_SCAN_BYTES,
   applyKlingFrame,
   fitKlingFrame,
   readVideoPixelSize,
@@ -170,6 +171,20 @@ function main() {
   const half = writeDisplayMatrix(coded, -65536, 0, 0, -65536);
   assert.deepEqual(readVideoPixelSize(half), { width: 1280, height: 720 });
 
+  const wideFinite = largeFiniteWebm(720, 406);
+  assert.ok(wideFinite.length > WEBM_HEADER_SCAN_BYTES);
+  assert.deepEqual(readVideoPixelSize(wideFinite), { width: 720, height: 406 });
+
+  const big = extendFiniteWebm(readFileSync(path.join(dir, "land.webm")), WEBM_HEADER_SCAN_BYTES + 64 * 1024);
+  assert.ok(big.length > WEBM_HEADER_SCAN_BYTES, `big webm was ${big.length}`);
+  const segmentAt = big.indexOf(Buffer.from([0x18, 0x53, 0x80, 0x67]));
+  assert.ok(segmentAt >= 0);
+  assert.notDeepEqual(
+    [...big.subarray(segmentAt + 4, segmentAt + 12)],
+    [0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+  );
+  assert.deepEqual(readVideoPixelSize(big), { width: 720, height: 406 });
+
   console.log("kling-frame-check ok");
 }
 
@@ -204,6 +219,45 @@ function unknownSegmentWebm(width: number, height: number): Buffer {
 function finiteSegmentWebm(width: number, height: number): Buffer {
   const tracks = videoTrack(width, height);
   return Buffer.concat([ebmlHeader(), element(Buffer.from([0x18, 0x53, 0x80, 0x67]), tracks)]);
+}
+
+/** Finite Segment whose declared size is past the header scan budget. Dimensions stay in the header. */
+function largeFiniteWebm(width: number, height: number): Buffer {
+  const tracks = videoTrack(width, height);
+  const payloadSize = WEBM_HEADER_SCAN_BYTES + 64 * 1024;
+  const payload = Buffer.alloc(payloadSize);
+  tracks.copy(payload);
+  const size = Buffer.from([0x20 | ((payloadSize >> 16) & 0x1f), (payloadSize >> 8) & 0xff, payloadSize & 0xff]);
+  return Buffer.concat([ebmlHeader(), Buffer.from([0x18, 0x53, 0x80, 0x67]), size, payload]);
+}
+
+/** Keep ffmpeg's real header and stretch the finite Segment past the scan budget. */
+function extendFiniteWebm(source: Buffer, minPayload: number): Buffer {
+  const id = Buffer.from([0x18, 0x53, 0x80, 0x67]);
+  const at = source.indexOf(id);
+  if (at < 0) throw new Error("segment missing");
+  const first = source[at + 4] ?? 0;
+  let length = 1;
+  let mask = 0x80;
+  while (length <= 8 && (first & mask) === 0) {
+    mask >>= 1;
+    length += 1;
+  }
+  if (length > 8) throw new Error("unexpected segment size width");
+  let declared = first & (mask - 1);
+  for (let index = 1; index < length; index += 1) declared = declared * 256 + (source[at + 4 + index] ?? 0);
+  const data = at + 4 + length;
+  if (data + declared > source.length) throw new Error("segment payload is truncated");
+  const payload = source.subarray(data, data + declared);
+  const grown = Buffer.concat([payload, Buffer.alloc(Math.max(0, minPayload - payload.length))]);
+  const size = Buffer.alloc(8);
+  size[0] = 0x01;
+  let remaining = grown.length;
+  for (let index = 7; index >= 1; index -= 1) {
+    size[index] = remaining & 0xff;
+    remaining = Math.floor(remaining / 256);
+  }
+  return Buffer.concat([source.subarray(0, at), id, size, grown]);
 }
 
 function writeDisplayMatrix(mp4: Buffer, a: number, b: number, c: number, d: number): Buffer {
