@@ -10,6 +10,7 @@ import { prepareVideo, VIDEO_MAX_BYTES } from "@/lib/media";
 import { resolvePaparazziScene } from "@/lib/paparazzi-scene";
 import { saveMockJob } from "@/lib/mock";
 import { parseRunParams } from "@/lib/params";
+import { applyKlingFrame, readVideoPixelSize } from "@/lib/kling-frame";
 import { buildJobBody, filePathFor, redactJobBody, type UploadedAsset } from "@/lib/workflow";
 
 const USER_BODY_MAX = 4_500_000;
@@ -124,6 +125,11 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
 
     const idempotencyKey = crypto.randomUUID();
     const body = buildJobBody(app, assets, params, key);
+    if (appId === "reverse-3d" && media.video) {
+      const dims = readVideoPixelSize(media.video.bytes);
+      if (!dims) throw new AppError(400, "invalid_input", "Could not read that video's dimensions.");
+      applyKlingFrame(body.workflow, dims.width, dims.height);
+    }
     let jobId: string;
     if (mock || !target) {
       const saved = await saveMockJob(app, appId, params, imageFiles);

@@ -565,9 +565,12 @@ assert.deepEqual(reverseJob.workflow["10"].inputs.file, {
 });
 assert.equal(reverseJob.workflow["15"].class_type, "GetVideoComponents");
 assert.deepEqual(reverseJob.workflow["15"].inputs.video, ["10", 0]);
+assert.equal(reverseJob.workflow["17"].class_type, "ResizeAndPadImage");
+assert.deepEqual(reverseJob.workflow["17"].inputs.image, ["15", 0]);
 assert.equal(reverseJob.workflow["16"].class_type, "CreateVideo");
 assert.equal(reverseJob.workflow["16"].inputs.fps, 24);
-assert.deepEqual(reverseJob.workflow["16"].inputs.images, ["15", 0]);
+assert.deepEqual(reverseJob.workflow["16"].inputs.images, ["17", 0]);
+assert.deepEqual(reverseJob.workflow["16"].inputs.audio, ["15", 1]);
 assert.equal(reverseJob.workflow["20"].class_type, "Kling4EditVideoNode");
 assert.deepEqual(reverseJob.workflow["20"].inputs["model.video_1"], ["16", 0]);
 assert.equal(reverseJob.workflow["20"].inputs["model.seed"], 42);
