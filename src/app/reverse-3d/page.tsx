@@ -17,7 +17,7 @@ export default function Reverse3dPage() {
   const mock = isMockMode();
   const ready = Boolean(apiKey("reverse-3d"));
   return (
-    <ViewportShell>
+    <ViewportShell blockout={false}>
       <Studio
         apps={buildPublicCatalog()}
         mock={mock}

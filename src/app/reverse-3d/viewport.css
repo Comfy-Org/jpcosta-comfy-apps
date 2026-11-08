@@ -488,34 +488,54 @@
 .vp .r3d-drop .btn { height: 42px; padding: 0 18px; font-size: 14px; border-radius: 12px; }
 .vp .r3d-keep { height: 36px; padding: 0 14px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Step 2: a big 3D view with one control beside it. */
-.r3d-two { gap: 18px; }
-.vp .r3d-view { flex: 1; margin-top: 0; min-height: 320px; }
-.vp .r3d-view::before { content: attr(data-hud) / ""; }
-.r3d-side {
-  width: 280px;
-  flex: none;
+/* Step 2: the loading screen. The subject's blocks land one by one while the video is made. */
+.r3d-two { flex-direction: column; }
+.vp .r3d-build { flex: 1; margin-top: 0; min-height: 360px; }
+.vp .r3d-build { background: radial-gradient(120% 100% at 50% 0%, #a9b6d6 0%, #7486ad 55%, #4f5d80 100%); }
+.vp .r3d-build::before { content: attr(data-hud) / ""; }
+.vp .r3d-build::after { content: none; }
+.block-build { position: absolute; inset: 0; }
+.block-build-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.r3d-status {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  z-index: 4;
+  translate: -50% 0;
+  width: min(340px, calc(100% - 32px));
   display: flex;
   flex-direction: column;
-  justify-content: center;
   gap: 10px;
-  padding: 8px 4px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.45);
+  color: var(--vp-ink);
+  font-size: 14px;
+  pointer-events: none;
 }
-.r3d-side h2 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.035em; color: var(--vp-ink); }
-.r3d-side p { margin: 0 0 10px; font-size: 14px; line-height: 1.45; color: var(--vp-mute); }
-.r3d-ends { display: flex; justify-content: space-between; margin-top: 2px; font-size: 12px; font-weight: 500; color: var(--vp-mute); }
-.r3d-amount { margin-bottom: 12px; }
-.vp .r3d-side .slider input[type="range"]:disabled { opacity: 0.5; }
-.r3d-side .need { margin-bottom: 2px; }
-.r3d-wait { color: var(--vp-mute); }
-.vp .r3d-side button.run { margin: 0; }
-.vp .r3d-side .btn { height: 44px; }
+.r3d-status b { font-weight: 600; }
+.r3d-status p { margin: -4px 0 0; font-size: 13px; line-height: 1.4; color: var(--vp-mute); }
+.r3d-status.bad { pointer-events: auto; top: 50%; bottom: auto; translate: -50% -50%; }
+.r3d-status.bad p { color: #b42318; }
+.r3d-status-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.vp .r3d-status-actions .btn { height: 36px; padding: 0 14px; font-size: 13px; }
+.r3d-status .track { display: block; position: relative; overflow: hidden; border-radius: 999px; }
+.r3d-status .track i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; transition: width 400ms ease; }
+.r3d-capture {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  width: 640px;
+  pointer-events: none;
+  visibility: hidden;
+}
 
 /* Step 3: the comparison fills the card. */
 .r3d-three { flex-direction: column; gap: 14px; }
-.vp .r3d-split,
-.vp .r3d-busy { flex: 1; margin-top: 0; min-height: 300px; cursor: ew-resize; touch-action: pan-y; }
-.vp .r3d-busy { cursor: progress; }
+.vp .r3d-split { flex: 1; margin-top: 0; min-height: 300px; cursor: ew-resize; touch-action: pan-y; }
 .vp .r3d-split::before,
 .vp .r3d-split::after { content: none; }
 .r3d-split-media {
@@ -567,26 +587,6 @@
 }
 .r3d-tag.l { left: 12px; }
 .r3d-tag.r { right: 12px; }
-.r3d-busy .shot { filter: grayscale(1) contrast(0.8) brightness(0.9); opacity: 0.6; }
-.r3d-busy-card {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  z-index: 2;
-  translate: -50% -50%;
-  width: min(300px, 80%);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 16px 18px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.45);
-  font-size: 14px;
-  color: var(--vp-ink);
-}
-.r3d-busy-card .track { display: block; position: relative; overflow: hidden; border-radius: 999px; }
-.r3d-busy-card .track i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; transition: width 300ms ease; }
 .r3d-row { display: flex; align-items: center; gap: 10px; min-height: 44px; }
 .vp .r3d-row .btn { height: 40px; padding: 0 16px; font-size: 14px; }
 .vp .btn.ghost { --face: transparent; --side: transparent; box-shadow: none; animation: none; color: var(--vp-ink2); padding-left: 6px; }
@@ -660,12 +660,11 @@
   .vp .stage-wrap { margin-top: 14px; }
 }
 @media (max-width: 980px) {
-  .r3d-two { flex-direction: column; }
-  .r3d-side { width: auto; padding: 0; }
-  .vp .r3d-view { min-height: 300px; }
+  .vp .r3d-build { min-height: 440px; }
   .vp .upload.r3d-drop { min-height: 380px; }
 }
 @media (max-width: 640px) {
+  .vp .header-bar { gap: 10px; }
   .r3d-steps button { padding: 0 8px 0 5px; gap: 5px; font-size: 12px; }
   .r3d-steps button:not(.on) span { display: none; }
   .r3d-steps button:not(.on) { padding-right: 5px; }

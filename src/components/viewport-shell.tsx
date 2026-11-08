@@ -318,21 +318,25 @@ function AxisGizmo() {
 
 /** Fake viewport menu for the site header. Decoration only. */
 /** Wraps a page so the whole UI reads as a 3D viewport that renders where the cursor goes. */
-export function ViewportShell({ children }: { children: ReactNode }) {
+export function ViewportShell({ children, blockout = true }: { children: ReactNode; blockout?: boolean }) {
   return (
     <div className="vp">
       <div className="vp-world" aria-hidden="true">
         <div className="vp-floor" />
       </div>
       {children}
-      <div className="vp-hud" aria-hidden="true">
-        <span className="vp-hint">Move the cursor to render</span>
-        <span className="vp-hud-br">
-          Frame <b><FrameCounter /></b> · 24 fps
-        </span>
-        <AxisGizmo />
-      </div>
-      <Blockout />
+      {blockout ? (
+        <>
+          <div className="vp-hud" aria-hidden="true">
+            <span className="vp-hint">Move the cursor to render</span>
+            <span className="vp-hud-br">
+              Frame <b><FrameCounter /></b> · 24 fps
+            </span>
+            <AxisGizmo />
+          </div>
+          <Blockout />
+        </>
+      ) : null}
     </div>
   );
 }

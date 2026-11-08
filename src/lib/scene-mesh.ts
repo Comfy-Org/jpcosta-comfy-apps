@@ -55,7 +55,19 @@ function meshBounds(positions: Float32Array): { min: [number, number, number]; m
  * Chunky boxes of an already-reduced mesh. The slider only changes the box
  * size. 100% is this mesh, which is about 30% of the image-to-3D face count.
  */
-export function buildBoxMesh(positions: Float32Array, indices: ArrayLike<number>, targetPolygons: number): SceneMesh {
+type BoxGrid = {
+  cols: number;
+  rows: number;
+  depth: number;
+  filled: (x: number, y: number, z: number) => boolean;
+  cube: number;
+  inset: number;
+  originX: number;
+  originY: number;
+  originZ: number;
+};
+
+function boxGrid(positions: Float32Array, indices: ArrayLike<number>, targetPolygons: number): BoxGrid {
   if (positions.length < 9 || indices.length < 3) throw new Error("Could not build a scene mesh.");
   const faces = Math.floor(indices.length / 3);
   const finest = Math.max(6, Math.min(24, Math.round(Math.cbrt(faces) * 1.6)));
@@ -124,6 +136,42 @@ export function buildBoxMesh(positions: Float32Array, indices: ArrayLike<number>
   const originX = (-cols * cube) / 2;
   const originY = -rows * cube * 0.5;
   const originZ = (-depth * cube) / 2;
+  return { cols, rows, depth, filled, cube, inset, originX, originY, originZ };
+}
+
+export type BoxCells = {
+  /** Box centres, x y z per box. */
+  centers: Float32Array;
+  /** Grid layer of each box, 0 at the bottom. */
+  layers: Uint16Array;
+  /** Edge length of one box, without the gap between boxes. */
+  size: number;
+  /** World height of the ground under the subject. */
+  floorY: number;
+};
+
+/** The same boxes as buildBoxMesh, as a list of centres, for drawing each box on its own. */
+export function buildBoxCells(positions: Float32Array, indices: ArrayLike<number>, targetPolygons: number): BoxCells {
+  const { cols, rows, depth, filled, cube, inset, originX, originY, originZ } = boxGrid(positions, indices, targetPolygons);
+  const centers: number[] = [];
+  const layers: number[] = [];
+  let low = Number.POSITIVE_INFINITY;
+  for (let y = 0; y < rows; y += 1) {
+    for (let z = 0; z < depth; z += 1) {
+      for (let x = 0; x < cols; x += 1) {
+        if (!filled(x, y, z)) continue;
+        centers.push(originX + (x + 0.5) * cube, originY + (y + 0.5) * cube, originZ + (z + 0.5) * cube);
+        layers.push(y);
+        low = Math.min(low, originY + y * cube + inset);
+      }
+    }
+  }
+  if (centers.length === 0) throw new Error("Could not build a scene mesh.");
+  return { centers: new Float32Array(centers), layers: new Uint16Array(layers), size: cube - inset * 2, floorY: low };
+}
+
+export function buildBoxMesh(positions: Float32Array, indices: ArrayLike<number>, targetPolygons: number): SceneMesh {
+  const { cols, rows, depth, filled, cube, inset, originX, originY, originZ } = boxGrid(positions, indices, targetPolygons);
   const outPositions: number[] = [];
   const normals: number[] = [];
   const colors: number[] = [];

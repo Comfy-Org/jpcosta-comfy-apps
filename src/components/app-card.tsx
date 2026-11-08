@@ -7,7 +7,8 @@ import { FORM_BUDGET_BYTES, VIDEO_FORM_BUDGET_BYTES, imageRejectReason, packImag
 import { clientFailureMessage, fetchBlobRetrying, type ClientStep } from "@/lib/client-fetch";
 import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
 import { requestSubjectModel, sampleSceneFrames, type SceneModel } from "@/lib/scene-client";
-import { SCENE_POLYGON_DEFAULT } from "@/lib/scene-mesh";
+import { buildBoxCells, SCENE_POLYGON_DEFAULT } from "@/lib/scene-mesh";
+import { BlockBuild } from "@/components/block-build";
 import { LILAC, TERMINAL_STATUSES, type CatalogApp, type CatalogImage, type JobView, type RunResponse, type TextControl } from "@/lib/types";
 import { AppIcon } from "@/components/app-icon";
 import { SceneOrbit, type SceneOrbitHandle } from "@/components/scene-orbit";
@@ -107,6 +108,10 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
   const [polygonCount, setPolygonCount] = useState(0);
   /** Steps layout: a step the person went back to, over the one the state implies. */
   const [pick, setPick] = useState<Step | null>(null);
+  /** Steps layout: the result the build animation has finished for, so the result step can open. */
+  const [shownId, setShownId] = useState<string | null>(null);
+  /** Steps layout: start the job on its own once the 3D subject is ready. */
+  const autoRun = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const sceneToken = useRef(0);
   const sceneOrbitRef = useRef<SceneOrbitHandle | null>(null);
@@ -746,6 +751,23 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
       />
     ) : null;
 
+  const cells = useMemo(() => {
+    if (!scene) return null;
+    try {
+      return buildBoxCells(scene.positions, scene.indices, SCENE_POLYGON_DEFAULT);
+    } catch {
+      return null;
+    }
+  }, [scene]);
+
+  useEffect(() => {
+    if (layout !== "steps" || !autoRun.current || sceneState !== "ready" || !scene || busy) return;
+    autoRun.current = false;
+    void run();
+    // run reads the latest uploads and scene from this render; it should fire once when the subject is ready.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout, sceneState, scene]);
+
   const selectedScene = selectedToken ? `/api/paparazzi/scene?token=${encodeURIComponent(selectedToken)}` : "";
   const status = findingScene
     ? "Searching for a paparazzi photo"
@@ -772,17 +794,20 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
 
   if (layout === "steps" && app.kind === "reverse-3d") {
     const video = uploads.video;
-    const slider = app.controls.find((control) => control.key === "polygons");
-    const reached: Step = active ? 3 : video ? 2 : 1;
-    const implied: Step = phase === "error" && video ? 2 : reached;
-    const step: Step = busy ? 3 : (pick ?? implied);
-    const message = phase === "error" && error ? error : need;
+    const building = sceneState === "building";
+    const loaderDone = Boolean(active && shownId === active.id);
+    const reached: Step = active ? 3 : video || building ? 2 : 1;
+    const implied: Step = active ? (loaderDone ? 3 : 2) : video || building ? 2 : 1;
+    const step: Step = busy ? 2 : (pick ?? implied);
+    const replay = step === 2 && loaderDone && !busy;
+    const failed = phase === "error" && Boolean(error);
     const takeVideo = (file: File) => {
       setPick(null);
       setActiveId(null);
       setPhase("idle");
       setError(null);
       setRecovery(null);
+      autoRun.current = true;
       void takeFiles("video", [file]);
     };
     const saveCompare = () => {
@@ -792,20 +817,36 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
       downloadBlob(active.compareBlob, filename);
       setToast(filename);
     };
-    const fill =
-      slider && slider.type === "slider" && slider.max !== slider.min
-        ? ((polygonValue - slider.min) / (slider.max - slider.min)) * 100
-        : 0;
+    const headline = failed
+      ? "That did not work"
+      : sceneState === "error"
+        ? "Could not read that shot"
+        : building
+          ? need || "Reading the shot…"
+          : phase === "queued"
+            ? "Queued…"
+            : phase === "running"
+              ? `Un-rendering · ${Math.round(progress * 100)}%`
+              : active
+                ? "Done!"
+                : "Getting ready…";
+    const detail = failed ? error : sceneState === "error" ? need : !building && need ? need : null;
+    const loaderBar = building ? 0.04 : active ? 1 : bar;
     return (
       <article className="card r3d" data-step={step}>
         <StepNav
           step={step}
-          reached={busy ? 3 : reached}
+          reached={busy ? 2 : reached}
           onPick={(next) => {
             if (busy) return;
             setPick(next === implied ? null : next);
           }}
         />
+        {scene ? (
+          <div className="r3d-capture" aria-hidden="true" style={{ aspectRatio: video && video.height ? `${video.width} / ${video.height}` : "16 / 9" }}>
+            {sceneView}
+          </div>
+        ) : null}
         {step === 1 ? (
           <div className="r3d-one">
             <DropZone
@@ -815,127 +856,72 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
               onHot={(on) => setHot(on ? "video" : null)}
               onFile={takeVideo}
             />
-            <div className="need" role="status">
-              {sceneState === "building" && !video ? <span className="r3d-wait">{need || "Checking the clip…"}</span> : message}
-            </div>
+            <div className="need" role="status">{sceneState === "error" || failed ? null : need}</div>
             {video ? (
               <button type="button" className="btn r3d-keep" onClick={() => setPick(null)}>
-                Keep {video.name} <span className="arrow" aria-hidden="true">→</span>
+                Back to {video.name} <span className="arrow" aria-hidden="true">→</span>
               </button>
             ) : null}
           </div>
         ) : null}
-        {step === 2 && video ? (
+        {step === 2 ? (
           <div className="r3d-two">
-            <div
-              className="preview r3d-view"
-              data-hud={scene ? "persp · drag to orbit" : sceneState === "building" ? "persp · building the blockout" : "persp"}
-            >
-              {scene ? (
-                sceneView
-              ) : (
-                <div className="shot-wrap">
-                  <video className="shot" src={video.url} muted playsInline loop autoPlay />
-                </div>
-              )}
-            </div>
-            <div className="r3d-side">
-              <h2>How blocky?</h2>
-              <p>Fewer polygons make bigger, sillier blocks.</p>
-              {slider && slider.type === "slider" ? (
-                <div className="r3d-amount">
-                  <div className="slider">
-                    <input
-                      type="range"
-                      min={slider.min}
-                      max={slider.max}
-                      step={slider.step}
-                      value={polygonValue}
-                      aria-label="How blocky"
-                      aria-valuetext={polygonCount > 0 ? `${polygonCount} polygons` : undefined}
-                      disabled={!scene}
-                      style={{ ["--fill" as string]: `${fill}%` }}
-                      onChange={(event) => setControl("polygons", event.target.value)}
-                    />
+            <div className="preview r3d-build" data-hud={cells ? "persp · drag to orbit · click a block" : "persp"}>
+              <BlockBuild
+                cells={cells}
+                progress={busy ? progress : active ? 1 : 0}
+                done={Boolean(active) && !busy}
+                onFinished={() => {
+                  if (active) setShownId(active.id);
+                  setPick(null);
+                }}
+              />
+              <div className={`r3d-status${failed || sceneState === "error" ? " bad" : ""}`} aria-live="polite">
+                <b>{replay ? "Built again, just for fun" : headline}</b>
+                {detail ? <p>{detail}</p> : null}
+                {failed || sceneState === "error" ? (
+                  <div className="r3d-status-actions">
+                    {failed ? (
+                      <button type="button" className="btn dark" onClick={() => void (recovery ? resume() : run())}>
+                        {recovery?.kind === "download" ? "Retry download" : recovery ? "Check job" : "Try again"}
+                      </button>
+                    ) : null}
+                    <PickButton className="btn" onFile={takeVideo}>
+                      Another video
+                    </PickButton>
                   </div>
-                  <div className="r3d-ends" aria-hidden="true">
-                    <span>LEGO</span>
-                    <span>almost real</span>
-                  </div>
-                </div>
-              ) : null}
-              <div className="need" role="status">
-                {sceneState === "building" && !(phase === "error" && error) ? <span className="r3d-wait">{need || "Building the blockout…"}</span> : message}
-              </div>
-              {sceneState === "error" ? (
-                <PickButton className="btn" onFile={takeVideo}>
-                  Try another video
-                </PickButton>
-              ) : (
-                <button
-                  className="run"
-                  type="button"
-                  onClick={() => {
-                    setPick(null);
-                    void (recovery && phase === "error" ? resume() : run());
-                  }}
-                  disabled={busy || sceneState !== "ready"}
-                >
-                  <span className="label">
-                    {recovery && phase === "error" ? (
-                      recovery.kind === "download" ? "Retry download" : "Check job"
-                    ) : (
-                      <>
-                        Make playblast <span className="arrow" aria-hidden="true">→</span>
-                      </>
-                    )}
+                ) : (
+                  <span className="track" aria-hidden="true">
+                    <i style={{ width: `${Math.round(loaderBar * 100)}%` }} />
                   </span>
-                </button>
-              )}
+                )}
+              </div>
             </div>
           </div>
         ) : null}
-        {step === 3 ? (
+        {step === 3 && active ? (
           <div className="r3d-three">
-            {busy ? (
-              <div className="preview r3d-busy" aria-live="polite">
-                {video ? (
-                  <div className="shot-wrap">
-                    <video className="shot" src={video.url} muted playsInline loop autoPlay />
-                  </div>
-                ) : null}
-                <div className="r3d-busy-card">
-                  <b>{phase === "queued" ? "Queued…" : `Un-rendering · ${Math.round(progress * 100)}%`}</b>
-                  <span className="track" aria-hidden="true">
-                    <i style={{ width: `${Math.round(bar * 100)}%` }} />
-                  </span>
-                </div>
-              </div>
-            ) : active ? (
-              <VideoSplit
-                original={active.before.video || video?.url || active.url}
-                playblast={active.url}
-                position={compare}
-                onChange={setCompare}
-              />
-            ) : null}
+            <VideoSplit
+              original={active.before.video || video?.url || active.url}
+              playblast={active.url}
+              position={compare}
+              onChange={setCompare}
+            />
             <div className="r3d-row">
-              <button type="button" className="btn ghost" disabled={busy} onClick={() => setPick(2)}>
-                <span className="arrow" aria-hidden="true">←</span> Tweak again
-              </button>
+              <PickButton className="btn ghost" onFile={takeVideo}>
+                <span className="arrow" aria-hidden="true">↺</span> Another video
+              </PickButton>
               {toast ? (
                 <span className="toast r3d-toast">
                   ✓ Saved <b>{toast}</b>
                 </span>
               ) : null}
-              {active && !busy ? (
-                <DownloadMenu
-                  compareReady={Boolean(active.compareBlob)}
-                  compareNote={active.compareBlob ? "Final and playblast together" : active.compareError ? "Could not build it" : "Getting it ready…"}
-                  onPlayblast={() => void onDownload()}
-                  onCompare={saveCompare}
-                />
-              ) : null}
+              <DownloadMenu
+                compareReady={Boolean(active.compareBlob)}
+                compareNote={active.compareBlob ? "Final and playblast together" : active.compareError ? "Could not build it" : "Getting it ready…"}
+                onPlayblast={() => void onDownload()}
+                onCompare={saveCompare}
+              />
             </div>
           </div>
         ) : null}

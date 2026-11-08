@@ -8,7 +8,7 @@ export const STEP_SLOT_ID = "r3d-steps";
 
 export type Step = 1 | 2 | 3;
 
-const STEP_NAMES: Record<Step, string> = { 1: "Video", 2: "Tweak", 3: "Result" };
+const STEP_NAMES: Record<Step, string> = { 1: "Video", 2: "Un-render", 3: "Result" };
 
 const noop = () => () => {};
 
