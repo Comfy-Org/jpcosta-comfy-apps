@@ -152,7 +152,7 @@ function Blockout() {
         if (h < 1) allRendered = false;
         if (start && (now < start || (h > 0 && !(h >= 1 && grid.touched[i] === Infinity)))) live = true;
       }
-      scene.render(heat);
+      if (scene.render(heat)) live = true;
       // The canvas starts grey in CSS so nothing flashes before the scene draws. Holes need it clear.
       canvas.style.background = "transparent";
 
@@ -211,6 +211,7 @@ function Blockout() {
     const onMove = (event: PointerEvent) => {
       if (touchOnly) return;
       touchCircle(event.clientX, event.clientY, performance.now());
+      scene?.setPointer(event.clientX, event.clientY);
       wake();
     };
     const onFocus = (event: FocusEvent) => {

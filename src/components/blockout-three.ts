@@ -27,7 +27,10 @@ export type Blockout = {
   resize(vw: number, vh: number, dpr: number, cols: number, rows: number, cell: number): void;
   setShapes(shapes: Shape[]): void;
   /** heat is one byte per bucket, row by row from the top left. 255 is fully rendered. */
-  render(heat: Uint8Array): void;
+  /** Where the cursor is. The scene tilts around this point, so the blocks under the cursor stay lined up with the page. */
+  setPointer(x: number, y: number): void;
+  /** Returns true while the camera tilt is still easing, so the caller keeps drawing. */
+  render(heat: Uint8Array): boolean;
   dispose(): void;
 };
 
@@ -47,6 +50,19 @@ function backdropTexture(): THREE.CanvasTexture {
   return tex;
 }
 
+/** A soft dark square used as baked ambient occlusion under each box. */
+function aoTexture(): THREE.CanvasTexture {
+  const size = 128;
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const g = c.getContext("2d")!;
+  g.filter = "blur(14px)";
+  g.fillStyle = "#000";
+  g.fillRect(28, 28, size - 56, size - 56);
+  return new THREE.CanvasTexture(c);
+}
+
 export function createBlockout(canvas: HTMLCanvasElement): Blockout {
   const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, premultipliedAlpha: true });
   renderer.autoClear = false;
@@ -58,8 +74,8 @@ export function createBlockout(canvas: HTMLCanvasElement): Blockout {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(FOV, 1, 10, 10000);
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x5a5a5a, 1.5));
-  const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x4a4a4a, 1.15));
+  const sun = new THREE.DirectionalLight(0xffffff, 2.6);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.bias = -0.0004;
@@ -72,11 +88,16 @@ export function createBlockout(canvas: HTMLCanvasElement): Blockout {
   const backdropMat = new THREE.MeshStandardMaterial({ map: backdropTexture(), roughness: 1 });
   const backdrop = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), backdropMat);
   backdrop.receiveShadow = true;
-  scene.add(backdrop);
+  // Everything tilts together around the cursor: pivot sits at the cursor, world is offset back by the same amount.
+  const pivot = new THREE.Group();
+  const world = new THREE.Group();
+  pivot.add(world);
+  scene.add(pivot);
+  world.add(backdrop);
   const floorGrid = new THREE.GridHelper(1, 1, 0xffffff, 0xffffff);
   (floorGrid.material as THREE.Material).transparent = true;
   (floorGrid.material as THREE.Material).opacity = 0.12;
-  scene.add(floorGrid);
+  world.add(floorGrid);
 
   const unitBox = new THREE.BoxGeometry(1, 1, 1);
   unitBox.translate(0, 0, 0.5);
@@ -96,7 +117,22 @@ export function createBlockout(canvas: HTMLCanvasElement): Blockout {
   const dashMat = new THREE.LineDashedMaterial({ color: 0x1c1c20, dashSize: 5, gapSize: 4, transparent: true, opacity: 0.6 });
 
   let content = new THREE.Group();
-  scene.add(content);
+  world.add(content);
+
+  const aoMat = new THREE.MeshBasicMaterial({ color: 0x000000, map: aoTexture(), transparent: true, opacity: 0.38, depthWrite: false });
+  const unitPlane = new THREE.PlaneGeometry(1, 1);
+
+  // Tilt state, eased towards its target every frame.
+  const tilt = { px: 0, py: 0, rx: 0, ry: 0 };
+  const goal = { px: 0, py: 0, rx: 0, ry: 0 };
+  let hasPointer = false;
+  const aimAt = (x: number, y: number) => {
+    goal.px = x;
+    goal.py = y;
+    // Lean the scene a little towards the cursor, like orbiting a viewport camera.
+    goal.ry = (x / Math.max(1, vw) - 0.5) * 0.22 - 0.08;
+    goal.rx = (0.5 - y / Math.max(1, vh)) * 0.14 + 0.07;
+  };
 
   // Full-screen pass that erases rendered buckets: dst *= 1 - heat, for colour and alpha alike.
   let heatTex = new THREE.DataTexture(new Uint8Array(1), 1, 1, THREE.RedFormat);
@@ -146,13 +182,22 @@ export function createBlockout(canvas: HTMLCanvasElement): Blockout {
     });
   }
 
-  function addBox(group: THREE.Group, r: Rect, height: number, mat: THREE.Material, edges = true, shadow = true) {
+  function addBox(group: THREE.Group, r: Rect, height: number, mat: THREE.Material, edges = true, shadow = true, ao = false) {
     const mesh = new THREE.Mesh(unitBox, mat);
     mesh.position.set(r.x + r.w / 2, -(r.y + r.h / 2), r.top);
     mesh.scale.set(r.w, r.h, Math.max(0.5, height));
     mesh.castShadow = shadow;
     mesh.receiveShadow = true;
     group.add(mesh);
+    // Baked contact shadow under anything with real height.
+    if (ao && height >= 5) {
+      const pad = height * 0.5 + 4;
+      const shade = new THREE.Mesh(unitPlane, aoMat);
+      shade.position.set(r.x + r.w / 2 + height * 0.25, -(r.y + r.h / 2) - height * 0.25, r.top + 0.15);
+      shade.scale.set((r.w + pad * 2) / 0.56, (r.h + pad * 2) / 0.56, 1);
+      shade.renderOrder = -1;
+      group.add(shade);
+    }
     if (edges) {
       const line = new THREE.LineSegments(unitEdges, edgeMat);
       line.position.copy(mesh.position);
@@ -213,8 +258,8 @@ export function createBlockout(canvas: HTMLCanvasElement): Blockout {
       const back = -60;
       const scale = (dist - back) / dist;
       backdrop.position.set(vw / 2, -vh / 2, back);
-      backdrop.scale.set(vw * scale * 1.05, vh * scale * 1.05, 1);
-      const size = Math.max(vw, vh) * scale * 1.2;
+      backdrop.scale.set(vw * scale * 1.8, vh * scale * 1.8, 1);
+      const size = Math.max(vw, vh) * scale * 1.8;
       floorGrid.scale.set(size, 1, size);
       floorGrid.position.set(vw / 2, -vh / 2, back + 0.5);
       floorGrid.rotation.set(Math.PI / 2, 0, 0);
@@ -235,6 +280,11 @@ export function createBlockout(canvas: HTMLCanvasElement): Blockout {
       cam.far = dist * 3;
       cam.updateProjectionMatrix();
 
+      if (!hasPointer) {
+        aimAt(vw / 2, vh / 2);
+        Object.assign(tilt, goal);
+      }
+
       heatTex.dispose();
       heatTex = new THREE.DataTexture(new Uint8Array(cols * rows), cols, rows, THREE.RedFormat, THREE.UnsignedByteType);
       heatTex.magFilter = THREE.NearestFilter;
@@ -248,7 +298,7 @@ export function createBlockout(canvas: HTMLCanvasElement): Blockout {
 
     setShapes(shapes) {
       disposeGroup(content);
-      scene.remove(content);
+      world.remove(content);
       content = new THREE.Group();
 
       // Stack each shape on the tallest box under its centre, so text sits on its button and buttons on the card.
@@ -288,7 +338,7 @@ export function createBlockout(canvas: HTMLCanvasElement): Blockout {
             break;
           case "block":
             // Only blocks standing on the card cast shadows. Header blocks would throw them far onto the backdrop.
-            addBox(content, r, s.face >= 230 ? height + 6 : height, s.face >= 230 ? mats.run : mats.block, true, base >= 10);
+            addBox(content, r, s.face >= 230 ? height + 6 : height, s.face >= 230 ? mats.run : mats.block, true, base >= 10, true);
             break;
           case "well":
             addBox(content, r, height, mats.well, true, false);
@@ -326,24 +376,48 @@ export function createBlockout(canvas: HTMLCanvasElement): Blockout {
         inst.receiveShadow = true;
         content.add(inst);
       }
-      scene.add(content);
+      world.add(content);
+    },
+
+    setPointer(x, y) {
+      hasPointer = true;
+      aimAt(x, y);
     },
 
     render(heat) {
+      const ease = 0.12;
+      let moving = false;
+      for (const key of ["px", "py", "rx", "ry"] as const) {
+        const d = goal[key] - tilt[key];
+        const settle = key === "px" || key === "py" ? 0.5 : 0.0005;
+        if (Math.abs(d) > settle) {
+          tilt[key] += d * ease;
+          moving = true;
+        } else {
+          tilt[key] = goal[key];
+        }
+      }
+      pivot.position.set(tilt.px, -tilt.py, 0);
+      pivot.rotation.set(tilt.rx, tilt.ry, 0, "YXZ");
+      world.position.set(-tilt.px, tilt.py, 0);
+
       (heatTex.image.data as Uint8Array).set(heat.subarray(0, heatTex.image.data!.length));
       heatTex.needsUpdate = true;
       renderer.clear();
       renderer.render(scene, camera);
       renderer.render(eraseScene, eraseCam);
+      return moving;
     },
 
     dispose() {
       disposeGroup(content);
       unitBox.dispose();
+      unitPlane.dispose();
+      aoMat.map?.dispose();
       unitEdges.dispose();
       heatTex.dispose();
       backdropMat.map?.dispose();
-      for (const mat of [...Object.values(mats), edgeMat, screenLineMat, dashMat, eraseMat, backdropMat]) mat.dispose();
+      for (const mat of [...Object.values(mats), edgeMat, screenLineMat, dashMat, eraseMat, backdropMat, aoMat]) mat.dispose();
       renderer.dispose();
     },
   };
