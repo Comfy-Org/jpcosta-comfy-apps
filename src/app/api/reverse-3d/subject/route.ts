@@ -210,11 +210,10 @@ export async function POST(request: Request) {
 
     if (mock) return Response.json(mockMesh(0, "The main subject", times[0] ?? 0));
 
-    if (!apiKey("background-removal")) {
-      throw new AppError(500, "missing_key", missingKeyMessage("background-removal"));
-    }
-
     if (step === "hunyuan") {
+      if (!apiKey("background-removal")) {
+        throw new AppError(500, "missing_key", missingKeyMessage("background-removal"));
+      }
       const cutout = String(form.get("cutout") ?? "");
       const signature = String(form.get("sig") ?? "");
       let token = "";
@@ -237,16 +236,33 @@ export async function POST(request: Request) {
       return Response.json({ step: "hunyuan", jobId: publicRouteId("reverse-3d", jobId) });
     }
 
+    const png = await prepareImage(files[0], FRAME_SIDE);
+    // Without the Background Removal deployment (no key, or stopped), Hunyuan gets the frame as is.
+    // Hunyuan3D separates the subject itself; the cut-out only makes it cleaner.
+    const uncut = async () => {
+      const hunyuan = buildHunyuanWorkflow();
+      const meshTarget = deploymentTarget("reverse-3d");
+      const subjectAsset = await uploadAsset(meshTarget, png, "subject.png", "image/png");
+      wireImage(hunyuan, "1", subjectAsset, "subject.png");
+      const meshJob = await submitJob(meshTarget, { workflow: hunyuan, extra_data: { api_key_comfy_org: key ?? "" } }, crypto.randomUUID());
+      return Response.json({ step: "hunyuan", jobId: publicRouteId("reverse-3d", meshJob) });
+    };
+    if (!apiKey("background-removal")) return await uncut();
+
     // Submit BiRefNet and return. Waiting here used to sit inside this 60s
     // function until the cut-out finished, so a cold worker never reached Hunyuan.
     const cutoutTarget = deploymentTarget("background-removal");
-    const modelName = modelFromList(cutoutTarget.deploymentId, await listedBackgroundModels(cutoutTarget));
-    const cutout = buildCutoutWorkflow(modelName);
-    const png = await prepareImage(files[0], FRAME_SIDE);
-    const cutoutAsset = await uploadAsset(cutoutTarget, png, "subject.png", "image/png");
-    wireImage(cutout, "1", cutoutAsset, "subject.png");
-    const jobId = await submitJob(cutoutTarget, { workflow: cutout }, crypto.randomUUID());
-    return Response.json({ step: "cutout", jobId });
+    try {
+      const modelName = modelFromList(cutoutTarget.deploymentId, await listedBackgroundModels(cutoutTarget));
+      const cutout = buildCutoutWorkflow(modelName);
+      const cutoutAsset = await uploadAsset(cutoutTarget, png, "subject.png", "image/png");
+      wireImage(cutout, "1", cutoutAsset, "subject.png");
+      const jobId = await submitJob(cutoutTarget, { workflow: cutout }, crypto.randomUUID());
+      return Response.json({ step: "cutout", jobId });
+    } catch (error) {
+      if (error instanceof AppError && error.code === "deployment_stopped") return await uncut();
+      throw error;
+    }
   } catch (error) {
     return errorResponse(error);
   }
