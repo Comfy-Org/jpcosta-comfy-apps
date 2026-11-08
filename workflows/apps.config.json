@@ -461,7 +461,7 @@
         }
       },
       "promptTemplate": null,
-      "notes": "Kling 4.0 Edit playblast-only. Node 17 fits every frame to at least 700px on both sides before Kling (aspect kept; black pad only outside 0.40–2.50). Side-by-side compare is built in the browser (original left, playblast right). The preview posts up to 12 frames to GeminiNodeV3 on this deployment. BiRefNet (LoadBackgroundRemovalModel) runs on the background-removal deployment, using a bg_removal_name that host lists (birefnet.safetensors when present). Hunyuan3D (TencentImageToModelNode) runs here on the cut-out PNG, with no local background-removal model. Node 12 is a PNG of the browser's gray boxes of that reduced mesh, wired as model.reference_images.image_1. Serverless COMFY_BASE_URL_REVERSE_3D + COMFY_API_KEY_TEAM. Max input 10s.",
+      "notes": "Kling 4.0 Edit playblast-only. Node 17 fits every frame to at least 700px on both sides before Kling (aspect kept; black pad only outside 0.40–2.50). Side-by-side compare is built in the browser (original left, playblast right). The preview posts up to 12 frames to GeminiNodeV3 on this deployment. BiRefNet (LoadBackgroundRemovalModel) runs on the background-removal deployment. That v2 host does not serve object_info, so the cut-out loads birefnet.safetensors, the file installed there, unless a combo comes back with another name. Hunyuan3D (TencentImageToModelNode) runs here on the cut-out PNG, with no local background-removal model. Node 12 is a PNG of the browser's gray boxes of that reduced mesh, wired as model.reference_images.image_1. Serverless COMFY_BASE_URL_REVERSE_3D + COMFY_API_KEY_TEAM. Max input 10s.",
       "output": {
         "node": "21",
         "media": "video"

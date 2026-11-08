@@ -106,6 +106,22 @@ export function backgroundModelName(listed: readonly string[]): string {
   return installed ?? names[0];
 }
 
+/** Host that ships `models/background_removal/birefnet.safetensors`. */
+export const BACKGROUND_REMOVAL_DEPLOYMENT_ID = "dep-e45cb437-0991-4689-9f7c-77d5748e3adc";
+
+/**
+ * Choose `bg_removal_name`.
+ * A non-empty combo wins. `listed === null` means the combo route could not be read.
+ * That v2 deployment does not serve `object_info`, and the file installed there is still
+ * `birefnet.safetensors`, so the cut-out loads that name instead of failing the preview.
+ */
+export function backgroundModelForDeployment(deploymentId: string, listed: readonly string[] | null): string {
+  if (listed && listed.length > 0) return backgroundModelName(listed);
+  if (listed === null && deploymentId === BACKGROUND_REMOVAL_DEPLOYMENT_ID) return "birefnet.safetensors";
+  if (listed) throw new Error("That deployment lists no background-removal model, so no filename can be validated.");
+  throw new Error("Could not read the background-removal model list.");
+}
+
 /**
  * Same chain as the background-removal app. Submitted only to that deployment.
  * `modelName` must be one of the names its `LoadBackgroundRemovalModel` combo lists.

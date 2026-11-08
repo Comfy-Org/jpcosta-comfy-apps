@@ -7,6 +7,7 @@ import { prepareImage } from "@/lib/images";
 import { blockFigureMesh, decodeGlb, reduceMesh } from "@/lib/mesh-reduce";
 import { verifyAssetSignature } from "@/lib/signing";
 import {
+  backgroundModelForDeployment,
   backgroundModelName,
   buildCutoutWorkflow,
   buildHunyuanWorkflow,
@@ -39,36 +40,32 @@ function wireImage(workflow: Workflow, nodeId: string, id: string, filePath: str
 }
 
 /**
- * The background-removal deployment is the one that ships `models/background_removal`.
- * Reverse 3D is partner-only, so its combo for this input is empty.
+ * Comfy API v2 on a deployment serves `/api/v2/assets` and `/api/v2/jobs`.
+ * `object_info` is the older cloud route, so these paths 404 and the combo cannot be read.
+ * A body with names is a real list. Null means the route was missing or rejected.
  */
-async function listedBackgroundModels(target: DeploymentTarget): Promise<string[]> {
-  const paths = ["/object_info/LoadBackgroundRemovalModel", "/api/object_info/LoadBackgroundRemovalModel"];
-  let saw = false;
+async function listedBackgroundModels(target: DeploymentTarget): Promise<readonly string[] | null> {
+  const paths = ["/api/object_info", "/api/object_info/LoadBackgroundRemovalModel", "/object_info/LoadBackgroundRemovalModel"];
   for (const pathname of paths) {
     try {
       const body = await fetchDeploymentJson(target, pathname);
-      saw = true;
       const names = comboOptions(body, "bg_removal_name");
       if (names.length > 0) return names;
+      // A 200 that never mentions the input is the wrong shape, not an empty combo.
+      if (JSON.stringify(body).includes("bg_removal_name")) return [];
     } catch (error) {
       if (error instanceof AppError && (error.status === 404 || error.status === 405)) continue;
-      throw error;
+      return null;
     }
   }
-  if (!saw) throw new AppError(502, "upstream_error", "Could not read the background-removal model list.");
-  throw new AppError(
-    502,
-    "upstream_error",
-    "The background-removal deployment lists no background-removal model, so no filename can be validated.",
-  );
+  return null;
 }
 
-function modelFromList(listed: readonly string[]): string {
+function modelFromList(deploymentId: string, listed: readonly string[] | null): string {
   try {
-    return backgroundModelName(listed);
+    return backgroundModelForDeployment(deploymentId, listed);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "That deployment lists no background-removal model.";
+    const message = error instanceof Error ? error.message : "Could not read the background-removal model list.";
     throw new AppError(502, "upstream_error", message);
   }
 }
@@ -201,7 +198,7 @@ export async function POST(request: Request) {
     }
     const cutoutTarget = deploymentTarget("background-removal");
     const meshTarget = deploymentTarget("reverse-3d");
-    const modelName = modelFromList(await listedBackgroundModels(cutoutTarget));
+    const modelName = modelFromList(cutoutTarget.deploymentId, await listedBackgroundModels(cutoutTarget));
     const cutout = buildCutoutWorkflow(modelName);
     const png = await prepareImage(files[0], FRAME_SIDE);
     const cutoutAsset = await uploadAsset(cutoutTarget, png, "subject.png", "image/png");

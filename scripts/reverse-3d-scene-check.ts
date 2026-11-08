@@ -10,7 +10,10 @@ import { POST as postSubject } from "../src/app/api/reverse-3d/subject/route";
 import { getApp } from "../src/lib/config";
 import { blockFigureMesh, decodeGlb, encodeGlb, reduceMesh } from "../src/lib/mesh-reduce";
 import { buildBoxMesh, orbitFromDrag, projectPoint, SCENE_CLAY, SCENE_DEFAULT_PITCH, SCENE_DEFAULT_YAW, sceneMvp } from "../src/lib/scene-mesh";
+import { getDeployment } from "../src/lib/deployments";
 import {
+  BACKGROUND_REMOVAL_DEPLOYMENT_ID,
+  backgroundModelForDeployment,
   backgroundModelName,
   buildCutoutWorkflow,
   buildHunyuanWorkflow,
@@ -147,6 +150,11 @@ async function main() {
   assert.throws(() => backgroundModelName([]), /no background-removal model/);
   assert.equal(backgroundModelName(["birefnet.safetensors"]), "birefnet.safetensors");
   assert.equal(backgroundModelName(["BiRefNet-general.safetensors"]), "BiRefNet-general.safetensors");
+  assert.equal(getDeployment("background-removal")?.deploymentId, BACKGROUND_REMOVAL_DEPLOYMENT_ID);
+  assert.equal(backgroundModelForDeployment(BACKGROUND_REMOVAL_DEPLOYMENT_ID, null), "birefnet.safetensors");
+  assert.equal(backgroundModelForDeployment(BACKGROUND_REMOVAL_DEPLOYMENT_ID, ["BiRefNet-general.safetensors"]), "BiRefNet-general.safetensors");
+  assert.throws(() => backgroundModelForDeployment(BACKGROUND_REMOVAL_DEPLOYMENT_ID, []), /no background-removal model/);
+  assert.throws(() => backgroundModelForDeployment("dep-a166b403-62ba-4598-adeb-708471c20c8c", null), /Could not read/);
 
   const otherCutout = buildCutoutWorkflow(backgroundModelName(["BiRefNet-general.safetensors"]));
   assert.equal(otherCutout["2"]?.inputs.bg_removal_name, "BiRefNet-general.safetensors");
