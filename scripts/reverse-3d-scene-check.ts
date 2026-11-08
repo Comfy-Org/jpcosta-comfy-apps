@@ -12,7 +12,17 @@ import { mapJob } from "../src/lib/comfy";
 import { blockFigureMesh, decodeGlb, encodeGlb, reduceMesh } from "../src/lib/mesh-reduce";
 import { decidePublicRequest, isPublicApp } from "../src/lib/public-surface";
 import { signAssetId, verifyAssetSignature } from "../src/lib/signing";
-import { buildBoxMesh, orbitFromDrag, projectPoint, SCENE_CLAY, SCENE_DEFAULT_PITCH, SCENE_DEFAULT_YAW, sceneMvp } from "../src/lib/scene-mesh";
+import {
+  buildBoxMesh,
+  layoutSceneBlocks,
+  orbitFromDrag,
+  partBoxesMesh,
+  projectPoint,
+  SCENE_CLAY,
+  SCENE_DEFAULT_PITCH,
+  SCENE_DEFAULT_YAW,
+  sceneMvp,
+} from "../src/lib/scene-mesh";
 import { getDeployment } from "../src/lib/deployments";
 import {
   BACKGROUND_REMOVAL_DEPLOYMENT_ID,
@@ -23,7 +33,9 @@ import {
   buildPickWorkflow,
   comboOptions,
   cutoutAssetToken,
+  MOCK_SCENE_REPLY,
   parseSubjectChoice,
+  parseSubjectScene,
   selectMeshOutput,
   selectTextOutput,
   MESH_KEEP_FRACTION,
@@ -160,8 +172,60 @@ async function main() {
     assert.deepEqual(pick["20"]?.inputs[`model.images.image_${index}`], [String(index), 0]);
   }
   assert.match(String(pick["20"]?.inputs["model.prompt"]), /main subject/);
-  assert.equal(pick["20"]?.inputs["model.thinking_level"], "MINIMAL");
-  assert.equal(pick["20"]?.inputs["model.max_output_tokens"], 1024);
+  assert.match(String(pick["20"]?.inputs["model.prompt"]), /part: <name> \| <x> <bottom y> <z> \| <width> <height> <depth>/);
+  assert.equal(pick["20"]?.inputs["model.thinking_level"], "LOW");
+  assert.equal(pick["20"]?.inputs["model.max_output_tokens"], 4096);
+  // No image-to-3D step: the pick job is the whole 3D toy.
+  assert.equal(JSON.stringify(pick).includes("Tencent"), false);
+
+  const scene = parseSubjectScene(
+    [
+      "```",
+      "frame: 3",
+      "subject: a dancer",
+      "part: torso | 0 0.5 0 | 0.3 0.3 0.2",
+      "- part: head | 0, 0.82, 0.01 | 0.15, 0.16, 0.16",
+      "part: broken | 0 0.2 | 0.1 0.1 0.1",
+      "part: flat | 0 0.2 0 | 0 0.1 0.1",
+      "prop: chair | 0.6 -0.1 -0.2 | 0.4 0.5 0.4",
+      "part: arm | 0.2 0.5 0 | 0.08 0.3",
+      "```",
+    ].join("\r\n"),
+    6,
+  );
+  assert.equal(scene.frame, 2);
+  assert.equal(scene.subject, "a dancer");
+  assert.deepEqual(
+    scene.blocks.map((block) => `${block.kind}:${block.name}`),
+    ["part:torso", "part:head", "prop:chair"],
+  );
+  assert.equal(scene.blocks[1]?.bottom, 0.82);
+  assert.equal(scene.blocks[2]?.bottom, 0, "nothing sinks below the ground");
+  assert.throws(() => parseSubjectScene("frame: 1\nsubject: a cat", 4), /did not lay out any blocks/);
+  assert.throws(() => parseSubjectScene("frame: 1\nsubject: a cat\nprop: wall | 0 0 -1 | 2 1 0.1", 4), /did not lay out any blocks/);
+  const tooMany = ["frame: 1", "subject: a crowd", ...Array.from({ length: 30 }, (_, index) => `part: p${index} | 0 ${index * 0.03} 0 | 0.1 0.03 0.1`)];
+  assert.equal(parseSubjectScene(tooMany.join("\n"), 4).blocks.length, 14);
+
+  const mockScene = parseSubjectScene(MOCK_SCENE_REPLY, 12);
+  const laid = layoutSceneBlocks(mockScene.blocks);
+  assert.equal(laid.boxes.length, mockScene.blocks.length);
+  assert.ok(laid.boxes.some((box) => box.kind === "prop" && box.name === "table"));
+  const lowest = Math.min(...laid.boxes.map((box) => box.center[1] - box.size[1] / 2));
+  const highest = Math.max(...laid.boxes.map((box) => box.center[1] + box.size[1] / 2));
+  assert.ok(Math.abs(lowest - laid.floorY) < 1e-6, "the blocks stand on the floor");
+  assert.ok(Math.abs(lowest + highest) < 1e-6, "the layout is centred on the orbit target");
+  for (const axis of [0, 2]) {
+    const low = Math.min(...laid.boxes.map((box) => box.center[axis]! - box.size[axis]! / 2));
+    const high = Math.max(...laid.boxes.map((box) => box.center[axis]! + box.size[axis]! / 2));
+    assert.ok(high - low <= 2.7 + 1e-6, "props stay inside the camera's view");
+    assert.ok(Math.abs(low + high) < 1e-6);
+  }
+  const loneSubject = layoutSceneBlocks(mockScene.blocks.filter((block) => block.kind === "part"));
+  const loneTop = Math.max(...loneSubject.boxes.map((box) => box.center[1] + box.size[1] / 2));
+  assert.ok(Math.abs(loneTop - loneSubject.floorY - 1.55) < 1e-6, "the subject alone is 1.55 tall");
+  const boxMesh = partBoxesMesh(laid);
+  assert.equal(boxMesh.positions.length, laid.boxes.length * 8 * 3);
+  assert.equal(boxMesh.indices.length, laid.boxes.length * 36);
   assert.equal(parseSubjectChoice("frame: 4\nsubject: the armored figure", 12).frame, 3);
   assert.equal(parseSubjectChoice("frame: 4\nsubject: the armored figure", 12).subject, "the armored figure");
   assert.equal(parseSubjectChoice("Sure.\nframe: 2\nsubject: red mug\nThanks", 4).subject, "red mug");
@@ -498,27 +562,20 @@ async function main() {
   const subjectResponse = await postSubject(new Request("http://localhost/api/reverse-3d/subject", { method: "POST", body: subjectForm }));
   const subjectBody = (await subjectResponse.json()) as {
     subject?: string;
-    sourceFaces?: number;
-    reducedFaces?: number;
+    time?: number;
+    blocks?: { kind?: string; name?: string }[];
     positions?: number[];
     mock?: boolean;
     pick?: Record<string, { class_type?: string }>;
-    mesh?: Record<string, { class_type?: string; inputs?: Record<string, unknown> }>;
-    cutout?: Record<string, { class_type?: string; inputs?: Record<string, unknown> }>;
     error?: { message?: string };
   };
   assert.equal(subjectResponse.status, 200, JSON.stringify(subjectBody.error));
   assert.equal(subjectBody.subject, "The main subject");
+  assert.equal(subjectBody.time, 0.4);
   assert.equal(subjectBody.pick?.["20"]?.class_type, "GeminiNodeV3");
-  assert.equal(subjectBody.mesh?.["22"]?.class_type, "TencentImageToModelNode");
-  assert.equal(subjectBody.mesh?.["21"]?.class_type, "SaveGLB");
-  assert.deepEqual(subjectBody.mesh?.["21"]?.inputs?.mesh, ["22", 1]);
-  assert.equal(subjectBody.mesh?.["2"], undefined);
-  assert.equal(JSON.stringify(subjectBody.mesh).includes("birefnet"), false);
-  assert.equal(subjectBody.cutout?.["2"]?.class_type, "LoadBackgroundRemovalModel");
-  assert.equal(subjectBody.cutout?.["2"]?.inputs?.bg_removal_name, "birefnet.safetensors");
-  assert.ok((subjectBody.reducedFaces ?? 0) < (subjectBody.sourceFaces ?? 0));
-  assert.ok((subjectBody.positions?.length ?? 0) > 9);
+  assert.ok((subjectBody.blocks?.length ?? 0) >= 5);
+  assert.ok(subjectBody.blocks?.some((block) => block.kind === "part" && block.name === "head"));
+  assert.equal(subjectBody.positions, undefined, "the toy is the blocks, not a mesh");
   assert.equal(subjectBody.mock, true);
 
   const cutoutForm = new FormData();

@@ -14,7 +14,8 @@ import {
   buildPickWorkflow,
   comboOptions,
   cutoutAssetToken,
-  parseSubjectChoice,
+  MOCK_SCENE_REPLY,
+  parseSubjectScene,
   SUBJECT_FRAME_CAP,
 } from "@/lib/subject-pipeline";
 import type { JobView } from "@/lib/types";
@@ -191,19 +192,27 @@ export async function POST(request: Request) {
     if (step === "pick") {
       const workflow = buildPickWorkflow(files.length);
       if (mock) {
-        const choice = parseSubjectChoice("frame: 1\nsubject: The main subject", files.length);
+        const scene = parseSubjectScene(MOCK_SCENE_REPLY, files.length);
         return Response.json({
-          ...mockMesh(choice.frame, choice.subject, times[choice.frame] ?? 0),
+          mock: true,
+          step: "pick",
+          frame: scene.frame,
+          subject: scene.subject,
+          time: times[scene.frame] ?? 0,
+          blocks: scene.blocks,
           pick: workflow,
         });
       }
       const target = deploymentTarget("reverse-3d");
-      for (let index = 0; index < files.length; index += 1) {
-        const png = await prepareImage(files[index], FRAME_SIDE);
-        const filePath = `frame_${index + 1}.png`;
-        const id = await uploadAsset(target, png, filePath, "image/png");
-        wireImage(workflow, String(index + 1), id, filePath);
-      }
+      // Upload the frames side by side: this is the wait before the 3D toy can start.
+      await Promise.all(
+        files.map(async (file, index) => {
+          const png = await prepareImage(file, FRAME_SIDE);
+          const filePath = `frame_${index + 1}.png`;
+          const id = await uploadAsset(target, png, filePath, "image/png");
+          wireImage(workflow, String(index + 1), id, filePath);
+        }),
+      );
       const jobId = await submitJob(target, { workflow, extra_data: { api_key_comfy_org: key ?? "" } }, crypto.randomUUID());
       return Response.json({ step: "pick", jobId: publicRouteId("reverse-3d", jobId) });
     }

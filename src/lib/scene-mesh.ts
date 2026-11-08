@@ -5,6 +5,8 @@
  * The slider only changes how big those boxes are.
  */
 
+import type { SceneBlock } from "@/lib/subject-pipeline";
+
 export const SCENE_POLYGON_MIN = 64;
 export const SCENE_POLYGON_MAX = 4096;
 /** Opens on the finest boxes. Dragging down makes the boxes bigger. */
@@ -398,6 +400,10 @@ export type PartBox = {
   center: [number, number, number];
   /** Edge lengths in world units. */
   size: [number, number, number];
+  /** What the block is, such as "head" or "table". Shown when the pointer is over it. */
+  name?: string;
+  /** A piece of the subject, or something next to it. */
+  kind?: "part" | "prop";
 };
 
 export type PartBoxes = {
@@ -491,4 +497,83 @@ export function buildPartBoxes(positions: Float32Array, indices: ArrayLike<numbe
   if (boxes.length === 0) throw new Error("Could not build a scene mesh.");
   const floorY = Math.min(...boxes.map((box) => box.center[1] - box.size[1] / 2));
   return { boxes, floorY };
+}
+
+/** World height of the subject in the loading build, the same as the old mesh volume. */
+const LAYOUT_SUBJECT_HEIGHT = 1.55;
+/** The whole layout, props included, stays inside this footprint and height so the camera keeps it in view. */
+const LAYOUT_MAX_SPAN = 2.7;
+const LAYOUT_MAX_HEIGHT = 1.9;
+
+/**
+ * Place the model's blocks in the loading scene: the subject 1.55 tall,
+ * shrunk when the props spread wider, centred on the origin, standing on `floorY`.
+ */
+export function layoutSceneBlocks(blocks: readonly SceneBlock[]): PartBoxes {
+  if (blocks.length === 0) throw new Error("The model did not lay out any blocks.");
+  const parts = blocks.filter((block) => block.kind === "part");
+  const subjectTop = Math.max(...(parts.length ? parts : blocks).map((block) => block.bottom + block.height));
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  let top = 0;
+  for (const block of blocks) {
+    minX = Math.min(minX, block.x - block.width / 2);
+    maxX = Math.max(maxX, block.x + block.width / 2);
+    minZ = Math.min(minZ, block.z - block.depth / 2);
+    maxZ = Math.max(maxZ, block.z + block.depth / 2);
+    top = Math.max(top, block.bottom + block.height);
+  }
+  const scale = Math.min(
+    LAYOUT_SUBJECT_HEIGHT / Math.max(0.2, subjectTop),
+    LAYOUT_MAX_SPAN / Math.max(0.01, maxX - minX, maxZ - minZ),
+    LAYOUT_MAX_HEIGHT / Math.max(0.01, top),
+  );
+  const midX = (minX + maxX) / 2;
+  const midZ = (minZ + maxZ) / 2;
+  const floorY = -(top * scale) / 2;
+  const boxes = blocks.map((block): PartBox => ({
+    center: [(block.x - midX) * scale, floorY + (block.bottom + block.height / 2) * scale, (block.z - midZ) * scale],
+    size: [block.width * scale, block.height * scale, block.depth * scale],
+    name: block.name,
+    kind: block.kind,
+  }));
+  return { boxes, floorY };
+}
+
+/** The blocks as one triangle mesh, for views that draw a mesh instead of separate boxes. */
+export function partBoxesMesh(parts: PartBoxes): { positions: Float32Array; indices: Uint32Array } {
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const corners: Vec3[] = [
+    [-1, -1, -1],
+    [1, -1, -1],
+    [1, 1, -1],
+    [-1, 1, -1],
+    [-1, -1, 1],
+    [1, -1, 1],
+    [1, 1, 1],
+    [-1, 1, 1],
+  ];
+  const faces = [
+    [0, 3, 2, 1],
+    [4, 5, 6, 7],
+    [0, 1, 5, 4],
+    [3, 7, 6, 2],
+    [0, 4, 7, 3],
+    [1, 2, 6, 5],
+  ];
+  for (const box of parts.boxes) {
+    const base = positions.length / 3;
+    for (const corner of corners) {
+      positions.push(
+        box.center[0] + (corner[0] * box.size[0]) / 2,
+        box.center[1] + (corner[1] * box.size[1]) / 2,
+        box.center[2] + (corner[2] * box.size[2]) / 2,
+      );
+    }
+    for (const [a, b, c, d] of faces) indices.push(base + a!, base + b!, base + c!, base + a!, base + c!, base + d!);
+  }
+  return { positions: new Float32Array(positions), indices: new Uint32Array(indices) };
 }

@@ -10,13 +10,29 @@ export const SUBJECT_FRAME_CAP = 12;
 export const MESH_KEEP_FRACTION = 0.3;
 
 export const SUBJECT_PROMPT = `These {count} images are frames from one clip, in order. Image 1 is the earliest.
-Name the single main subject, the person or object the clip is about.
-Choose the one frame where that subject is easiest to see: large, unobstructed, and not blurred.
-Reply with exactly two lines and no other text:
-frame: <integer from 1 to {count}>
-subject: <a short name>`;
+This shot will be rebuilt as a toy made of a few big grey blocks, like a 3D blockout.
 
-/** Gemini looks at every sampled frame and names the subject and the frame. */
+1. Name the single main subject, the person, animal or object the clip is about.
+2. Choose the one frame where that subject is easiest to see: large, unobstructed, and not blurred.
+3. In that frame, describe the subject as 5 to 12 big blocks, one per part. For a person: head, torso, hips, upper arms, forearms, thighs, shins. For a car: body, cabin, wheels. Match the pose and the proportions you see.
+4. Add 0 to 4 big blocks for the largest things right next to the subject, such as a table, a chair, a wall, a car or a rock. Skip the sky, the ground itself and anything small.
+
+Coordinates, as seen from the camera of that frame:
+- The subject is 1 unit tall.
+- y points up, and y = 0 is the ground under the subject.
+- x points to the right of the image, z points toward the camera.
+- The subject is centred on x = 0, z = 0.
+Each block is a box that is not rotated. Give the x of its centre, the y of its bottom, the z of its centre, then its width along x, height along y and depth along z. Blocks may touch or overlap a little. Nothing goes below y = 0.
+
+Reply with only these lines and no other text:
+frame: <integer from 1 to {count}>
+subject: <a short name>
+part: <name> | <x> <bottom y> <z> | <width> <height> <depth>
+prop: <name> | <x> <bottom y> <z> | <width> <height> <depth>
+Write one part line per subject block and one prop line per block around it. For example:
+part: head | 0 0.86 0 | 0.15 0.14 0.16`;
+
+/** Gemini looks at every sampled frame, picks the subject and the frame, and lays the shot out as blocks. */
 export function buildPickWorkflow(frameCount: number): Workflow {
   const count = Math.max(1, Math.min(SUBJECT_FRAME_CAP, Math.round(frameCount)));
   const workflow: Workflow = {};
@@ -24,12 +40,12 @@ export function buildPickWorkflow(frameCount: number): Workflow {
   const gemini: Record<string, unknown> = {
     model: "Gemini 3.5 Flash",
     "model.prompt": prompt,
-    // MINIMAL is a listed level for this model. A 256-token cap can be spent on
-    // thinking and come back empty, so the answer cap stays above the two lines.
-    "model.thinking_level": "MINIMAL",
-    "model.max_output_tokens": 1024,
+    // LOW leaves a little room to reason about the pose and stays a few seconds long.
+    // The cap includes thinking, so it stays well above the 20 short lines of the answer.
+    "model.thinking_level": "LOW",
+    "model.max_output_tokens": 4096,
     "model.seed": 0,
-    "model.system_prompt": "You identify the main subject of a clip. Reply in the exact two-line format you are given.",
+    "model.system_prompt": "You turn a video shot into a simple 3D blockout made of boxes. Reply only in the exact line format you are given.",
     "model.temperature": 0,
     "model.top_p": 0.95,
   };
@@ -45,7 +61,7 @@ export function buildPickWorkflow(frameCount: number): Workflow {
   workflow["20"] = {
     class_type: "GeminiNodeV3",
     inputs: gemini,
-    _meta: { title: "Name the subject and frame" },
+    _meta: { title: "Pick the subject and lay it out as blocks" },
   };
   workflow["21"] = {
     class_type: "SaveText",
@@ -54,7 +70,7 @@ export function buildPickWorkflow(frameCount: number): Workflow {
       filename_prefix: "reverse-3d/subject",
       format: "txt",
     },
-    _meta: { title: "Subject choice" },
+    _meta: { title: "Subject and blocks" },
   };
   return workflow;
 }
@@ -268,3 +284,86 @@ export function parseSubjectChoice(text: string, frameCount: number): SubjectCho
   if (!subject) throw new Error("The model did not name a subject.");
   return { frame: frame - 1, subject };
 }
+
+/** One box from the model, in subject units: the subject is 1 tall and stands on y = 0. */
+export type SceneBlock = {
+  name: string;
+  /** A piece of the subject, or something next to it. */
+  kind: "part" | "prop";
+  x: number;
+  /** Height of the box's bottom above the ground. */
+  bottom: number;
+  z: number;
+  width: number;
+  height: number;
+  depth: number;
+};
+
+export type SubjectScene = SubjectChoice & { blocks: SceneBlock[] };
+
+const MAX_PARTS = 14;
+const MAX_PROPS = 4;
+const BLOCK_LINE = /^[\s*>-]*(part|prop)\s*:\s*([^|\n\r]*)\|([^|\n\r]+)\|([^\n\r]+)$/gim;
+
+function blockNumbers(text: string): number[] {
+  return text
+    .replace(/[()[\]`]/g, " ")
+    .split(/[\s,;]+/)
+    .filter(Boolean)
+    .map(Number);
+}
+
+/**
+ * Read the frame, the subject and the block lines. Lines that do not parse are skipped,
+ * so a reply that was cut short still gives the blocks it got to.
+ */
+export function parseSubjectScene(text: string, frameCount: number): SubjectScene {
+  const choice = parseSubjectChoice(text, frameCount);
+  const blocks: SceneBlock[] = [];
+  let parts = 0;
+  let props = 0;
+  for (const match of text.matchAll(BLOCK_LINE)) {
+    const kind = match[1]?.toLowerCase() === "prop" ? "prop" : "part";
+    const place = blockNumbers(match[3] ?? "");
+    const size = blockNumbers(match[4] ?? "");
+    if (place.length < 3 || size.length < 3) continue;
+    const [x, bottom, z] = place as [number, number, number];
+    const [width, height, depth] = size as [number, number, number];
+    if (![x, bottom, z, width, height, depth].every(Number.isFinite)) continue;
+    if (width <= 0 || height <= 0 || depth <= 0) continue;
+    if (kind === "part" ? parts >= MAX_PARTS : props >= MAX_PROPS) continue;
+    const clampSize = (value: number) => Math.min(6, Math.max(0.02, value));
+    const clampPlace = (value: number) => Math.min(6, Math.max(-6, value));
+    blocks.push({
+      name: (match[2] ?? "").trim().slice(0, 40) || (kind === "part" ? "part" : "prop"),
+      kind,
+      x: clampPlace(x),
+      bottom: Math.min(6, Math.max(0, bottom)),
+      z: clampPlace(z),
+      width: clampSize(width),
+      height: clampSize(height),
+      depth: clampSize(depth),
+    });
+    if (kind === "part") parts += 1;
+    else props += 1;
+  }
+  if (parts === 0) throw new Error("The model did not lay out any blocks.");
+  return { ...choice, blocks };
+}
+
+/** What the mock server says Gemini replied: a person waving next to a table. Not a model answer. */
+export const MOCK_SCENE_REPLY = `frame: 1
+subject: The main subject
+part: left shin | -0.075 0 0 | 0.1 0.27 0.12
+part: right shin | 0.075 0 0 | 0.1 0.27 0.12
+part: left thigh | -0.075 0.26 0 | 0.12 0.22 0.14
+part: right thigh | 0.075 0.26 0 | 0.12 0.22 0.14
+part: hips | 0 0.46 0 | 0.3 0.1 0.18
+part: torso | 0 0.55 0 | 0.32 0.28 0.2
+part: head | 0 0.85 0 | 0.15 0.15 0.16
+part: left upper arm | -0.2 0.56 0 | 0.08 0.26 0.08
+part: left forearm | -0.2 0.34 0.02 | 0.07 0.23 0.07
+part: right upper arm | 0.24 0.75 0 | 0.17 0.07 0.08
+part: right forearm | 0.35 0.75 0 | 0.07 0.21 0.07
+prop: table | 0.75 0 -0.15 | 0.6 0.42 0.5
+prop: wall | 0.1 0 -0.55 | 2 1.3 0.1`;
