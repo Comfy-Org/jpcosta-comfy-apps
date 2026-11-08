@@ -194,16 +194,23 @@ export async function requestSubjectModel(
   if (cutoutJob.positions) {
     return asModel({ ...cutoutJob, subject: choice.subject, time: times[choice.frame] ?? 0 }, times[choice.frame] ?? 0);
   }
-  if (!cutoutJob.jobId || cutoutJob.jobId.includes("~")) {
-    throw new Error("Could not build a 3D subject from that clip.");
+  let meshJob: SubjectPayload;
+  if (cutoutJob.step === "hunyuan") {
+    // The server skipped the cut-out (Background Removal is off) and started Hunyuan on the frame.
+    meshJob = cutoutJob;
+    onStatus?.("Building the 3D model…");
+  } else {
+    if (!cutoutJob.jobId || cutoutJob.jobId.includes("~")) {
+      throw new Error("Could not build a 3D subject from that clip.");
+    }
+    const cutout = await pollCutout(cutoutJob.jobId, onStatus);
+    onStatus?.("Building the 3D model…");
+    const hunyuanForm = new FormData();
+    hunyuanForm.set("step", "hunyuan");
+    hunyuanForm.set("cutout", cutout.cutout);
+    hunyuanForm.set("sig", cutout.sig);
+    meshJob = await postSubject(hunyuanForm, onStatus);
   }
-  const cutout = await pollCutout(cutoutJob.jobId, onStatus);
-  onStatus?.("Building the 3D model…");
-  const hunyuanForm = new FormData();
-  hunyuanForm.set("step", "hunyuan");
-  hunyuanForm.set("cutout", cutout.cutout);
-  hunyuanForm.set("sig", cutout.sig);
-  const meshJob = await postSubject(hunyuanForm, onStatus);
   if (meshJob.positions) {
     return asModel({ ...meshJob, subject: choice.subject, time: times[choice.frame] ?? 0 }, times[choice.frame] ?? 0);
   }
