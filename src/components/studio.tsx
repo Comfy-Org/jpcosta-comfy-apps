@@ -94,6 +94,7 @@ export function Studio({
   const [metrics, setMetrics] = useState({ width: 0, gap: MIN_CARD_GAP });
 
   const current = apps[index];
+  const carousel = count > 1;
   const cardW = Math.max(0, metrics.width);
   const step = cardW + metrics.gap;
 
@@ -338,19 +339,23 @@ export function Studio({
           <p className="warn">Set COMFY_API_KEY or COMFY_CLOUD_API_KEY on the server to run live jobs, or COMFY_MOCK=1 for sample output.</p>
         ) : null}
         {!mock && notice ? <p className="warn">{notice}</p> : null}
-        <nav className="header-nav" aria-label="Apps">
-          {apps.map((item, itemIndex) => (
-            <button key={item.id} type="button" className={itemIndex === index ? "on" : ""} onClick={() => goTo(itemIndex)}>
-              {item.name}
-            </button>
-          ))}
-        </nav>
+        {carousel ? (
+          <nav className="header-nav" aria-label="Apps">
+            {apps.map((item, itemIndex) => (
+              <button key={item.id} type="button" className={itemIndex === index ? "on" : ""} onClick={() => goTo(itemIndex)}>
+                {item.name}
+              </button>
+            ))}
+          </nav>
+        ) : null}
         <div className="stage-wrap">
+          {carousel ? (
           <button className="nav-arrow prev" type="button" aria-label="Previous app" onClick={() => goTo(index - 1)}>
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <path d="M10.25 3.25 5.5 8l4.75 4.75" />
             </svg>
           </button>
+          ) : null}
           <div className={busy ? "track-viewport is-open" : "track-viewport"} ref={viewportRef}>
             <div
               className="reel"
@@ -378,12 +383,15 @@ export function Studio({
               ))}
             </div>
           </div>
+          {carousel ? (
           <button className="nav-arrow next" type="button" aria-label="Next app" onClick={() => goTo(index + 1)}>
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <path d="M5.75 3.25 10.5 8l-4.75 4.75" />
             </svg>
           </button>
+          ) : null}
         </div>
+        {carousel ? (
         <div className="dots">
           <p className="foot-note">The API key stays on the server. Arrow keys move between apps.</p>
           <div className="dotrow">
@@ -395,6 +403,7 @@ export function Studio({
             </span>
           </div>
         </div>
+        ) : null}
       </main>
       <footer className="site-footer">
         <p>

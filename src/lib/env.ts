@@ -43,10 +43,11 @@ export function missingKeyMessage(slug?: string): string {
 }
 
 /** Banner text when a dedicated workspace key is unset. No secret values. */
-export function missingDedicatedKeyMessage(): string | null {
+export function missingDedicatedKeyMessage(onlySlug?: string): string | null {
   const pending: string[] = [];
   const names = new Set<string>();
   for (const [slug, record] of Object.entries(loadDeployments().apps)) {
+    if (onlySlug && slug !== onlySlug) continue;
     const name = record.keyEnv?.trim();
     if (!name || process.env[name]?.trim()) continue;
     names.add(name);

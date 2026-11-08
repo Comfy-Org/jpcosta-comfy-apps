@@ -11,6 +11,7 @@ import { resolvePaparazziScene } from "@/lib/paparazzi-scene";
 import { saveMockJob } from "@/lib/mock";
 import { parseRunParams } from "@/lib/params";
 import { applyKlingFrame, readVideoPixelSize } from "@/lib/kling-frame";
+import { isPublicApp } from "@/lib/public-surface";
 import { buildJobBody, filePathFor, redactJobBody, type UploadedAsset } from "@/lib/workflow";
 
 const USER_BODY_MAX = 4_500_000;
@@ -28,6 +29,7 @@ export const maxDuration = 60;
 export async function POST(request: Request, context: { params: Promise<{ app: string }> }) {
   try {
     const { app: appId } = await context.params;
+    if (!isPublicApp(appId)) throw new AppError(404, "not_found", "Unknown app.");
     const app = getApp(appId);
     if (!app) throw new AppError(404, "not_found", "Unknown app.");
 

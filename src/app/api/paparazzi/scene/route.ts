@@ -1,6 +1,7 @@
 import { downloadPublicImage } from "@/lib/fetch-image";
 import { errorResponse, AppError } from "@/lib/http";
 import { contentTypeFor, sniffImage } from "@/lib/images";
+import { isPublicApp } from "@/lib/public-surface";
 import { readSceneChoice } from "@/lib/scene-token";
 
 export const runtime = "nodejs";
@@ -9,6 +10,7 @@ export const maxDuration = 30;
 
 export async function GET(request: Request) {
   try {
+    if (!isPublicApp("paparazzi-me")) throw new AppError(404, "not_found", "Not found.");
     const url = new URL(request.url);
     const choice = readSceneChoice(url.searchParams.get("token") ?? "");
     const full = url.searchParams.get("size") === "full";

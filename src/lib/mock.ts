@@ -222,6 +222,16 @@ async function renderCutout(input: Buffer): Promise<Buffer> {
   return sharp(input).ensureAlpha().composite([{ input: maskPng, blend: "dest-in" }]).png().toBuffer();
 }
 
+export async function readMockOutputApp(outputId: string): Promise<string | null> {
+  try {
+    const pointer = JSON.parse(await readFile(path.join(ROOT, "outputs", `${outputId}.json`), "utf8")) as { jobId: string };
+    const meta = await readMockMeta(pointer.jobId);
+    return meta?.app ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function renderMockOutput(outputId: string, grids: Record<string, string> | undefined): Promise<Buffer> {
   let pointer: { jobId: string };
   try {

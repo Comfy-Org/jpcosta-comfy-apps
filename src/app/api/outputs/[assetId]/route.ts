@@ -6,7 +6,8 @@ import { errorResponse, AppError } from "@/lib/http";
 import { isMockOutputId, parsePublicRouteId } from "@/lib/ids";
 import { contentTypeFor, sniffImage } from "@/lib/images";
 import { sniffVideo, videoContentType } from "@/lib/media";
-import { renderMockOutput } from "@/lib/mock";
+import { readMockOutputApp, renderMockOutput } from "@/lib/mock";
+import { isPublicApp } from "@/lib/public-surface";
 import { verifyAssetSignature } from "@/lib/signing";
 
 export const runtime = "nodejs";
@@ -33,6 +34,10 @@ export async function GET(request: Request, context: { params: Promise<{ assetId
     if (assetId.includes("/") || assetId.includes("\\") || assetId.includes("..")) {
       throw new AppError(404, "not_found", "Output not found.");
     }
+    const routedEarly = parsePublicRouteId(assetId);
+    if (routedEarly && !isPublicApp(routedEarly.app)) {
+      throw new AppError(404, "not_found", "Output not found.");
+    }
 
     const signature = new URL(request.url).searchParams.get("sig");
     if (!verifyAssetSignature(assetId, signature)) {
@@ -41,13 +46,15 @@ export async function GET(request: Request, context: { params: Promise<{ assetId
 
     if (isMockOutputId(assetId)) {
       if (!isMockMode()) throw new AppError(404, "not_found", "Output not found.");
+      const owner = await readMockOutputApp(assetId);
+      if (!owner || !isPublicApp(owner)) throw new AppError(404, "not_found", "Output not found.");
       const grids = getApp("sprite-generator")?.grids;
       const png = await renderMockOutput(assetId, grids);
       return attachment("output.png", "image/png", png);
     }
 
     const routed = parsePublicRouteId(assetId);
-    if (!routed || !getDeployment(routed.app)) throw new AppError(404, "not_found", "Output not found.");
+    if (!routed || !isPublicApp(routed.app) || !getDeployment(routed.app)) throw new AppError(404, "not_found", "Output not found.");
 
     const signed = await fetchAssetUrl(deploymentTarget(routed.app), routed.id);
     let upstream: Response;

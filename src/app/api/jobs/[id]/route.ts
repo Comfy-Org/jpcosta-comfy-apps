@@ -5,6 +5,7 @@ import { isMockMode } from "@/lib/env";
 import { errorJson, errorResponse, AppError } from "@/lib/http";
 import { isMockJobId, isUuid, parsePublicRouteId, publicRouteId } from "@/lib/ids";
 import { mockJobView, readMockMeta } from "@/lib/mock";
+import { isPublicApp } from "@/lib/public-surface";
 import { signJobView } from "@/lib/signing";
 import type { JobView } from "@/lib/types";
 
@@ -34,11 +35,11 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     if (isMockJobId(id)) {
       if (!isMockMode()) throw new AppError(404, "not_found", "Job not found.");
       const meta = await readMockMeta(id);
-      if (!meta) throw new AppError(404, "not_found", "Job not found.");
+      if (!meta || !isPublicApp(meta.app)) throw new AppError(404, "not_found", "Job not found.");
       return Response.json(signJobView(mockJobView(meta)));
     }
     const routed = parsePublicRouteId(id);
-    if (!routed || !isUuid(routed.id) || !getDeployment(routed.app)) {
+    if (!routed || !isUuid(routed.id) || !isPublicApp(routed.app) || !getDeployment(routed.app)) {
       return errorJson(404, "not_found", "Job not found.");
     }
     const target = deploymentTarget(routed.app);
