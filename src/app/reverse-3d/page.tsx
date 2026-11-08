@@ -23,6 +23,8 @@ export default function Reverse3dPage() {
         configured
         notice={mock || ready ? null : missingDedicatedKeyMessage("reverse-3d")}
         menu={<ViewportMenu />}
+        brand="Reverse 3D"
+        hero={false}
       />
     </ViewportShell>
   );

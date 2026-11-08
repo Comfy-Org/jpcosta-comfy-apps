@@ -1,28 +1,26 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { Blockout as Blockout3D } from "@/components/blockout-three";
+import { collectShapes } from "@/lib/blockout-shapes";
 
 /** Size of one render bucket, in CSS pixels. */
 const CELL = 24;
-/** Canvas pixels per bucket in the mask. Keeps bucket edges crisp once the mask is scaled up. */
-const MASK_SCALE = 4;
 /** How far from the cursor buckets start rendering. */
-const RADIUS = 104;
+const RADIUS = 110;
 /** A bucket takes this long to render in once its turn comes. */
 const RISE_MS = 140;
 /** A rendered bucket stays rendered this long after the cursor leaves. */
-const HOLD_MS = 700;
-/** Then it fades back to the grey viewport over this long. */
+const HOLD_MS = 800;
+/** Then it fades back to the blockout over this long. */
 const DECAY_MS = 1400;
-/** Frames between mask uploads. 2 means roughly 30 updates per second. */
-const MASK_EVERY = 2;
 
 type Grid = {
   cols: number;
   rows: number;
   /** When each bucket starts rendering. 0 means never scheduled. */
   start: Float64Array;
-  /** When the cursor last touched each bucket. */
+  /** When the cursor last touched each bucket. Infinity keeps it rendered. */
   touched: Float64Array;
 };
 
@@ -42,153 +40,177 @@ function heatAt(grid: Grid, index: number, now: number): number {
 }
 
 /**
- * A grey "viewport" filter over the whole page, with holes cut where the cursor has been.
- * Under a hole the page shows its real colours, so the UI looks rendered only where you point.
+ * A clay blockout of the whole page, rendered in 3D over it: boxes for every control, bars for every line of text.
+ * Render buckets erase it wherever the cursor has been, and the real UI shows through.
  */
-function RenderReveal() {
-  const veilRef = useRef<HTMLDivElement>(null);
+function Blockout() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const bucketsRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
-    const veil = veilRef.current;
+    const canvas = canvasRef.current;
     const buckets = bucketsRef.current;
-    if (!veil || !buckets) return;
+    const root = document.querySelector(".vp .app");
+    const bctx = buckets?.getContext("2d");
+    if (!canvas || !buckets || !root || !bctx) return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const small = document.createElement("canvas");
-    const big = document.createElement("canvas");
-    const smallCtx = small.getContext("2d");
-    const bigCtx = big.getContext("2d");
-    const bucketCtx = buckets.getContext("2d");
-    if (!smallCtx || !bigCtx || !bucketCtx) return;
-
-    let grid = makeGrid(window.innerWidth, window.innerHeight);
-    let image = smallCtx.createImageData(grid.cols, grid.rows);
-    let raf = 0;
-    let frame = 0;
-    let dpr = 1;
-
-    const size = () => {
-      grid = makeGrid(window.innerWidth, window.innerHeight);
-      small.width = grid.cols;
-      small.height = grid.rows;
-      big.width = grid.cols * MASK_SCALE;
-      big.height = grid.rows * MASK_SCALE;
-      image = smallCtx.createImageData(grid.cols, grid.rows);
-      dpr = Math.min(2, window.devicePixelRatio || 1);
-      buckets.width = Math.round(window.innerWidth * dpr);
-      buckets.height = Math.round(window.innerHeight * dpr);
-      veil.style.setProperty("--mask-w", `${grid.cols * CELL}px`);
-      veil.style.setProperty("--mask-h", `${grid.rows * CELL}px`);
+    // With no cursor to point with, the page renders once on load and stays rendered.
+    const touchOnly = !window.matchMedia("(hover: hover)").matches;
+    const hide = () => {
+      canvas.style.display = "none";
+      buckets.style.display = "none";
     };
+    if (touchOnly && reduce) {
+      hide();
+      return;
+    }
 
-    const setMask = (url: string) => {
-      const value = url ? `url(${url})` : "none";
-      veil.style.setProperty("mask-image", value);
-      veil.style.setProperty("-webkit-mask-image", value);
+    let vw = window.innerWidth;
+    let vh = window.innerHeight;
+    let dpr = 1;
+    let grid = makeGrid(vw, vh);
+    let heat = new Uint8Array(grid.cols * grid.rows);
+    let scene: Blockout3D | null = null;
+    let layoutDirty = true;
+    let sizeDirty = true;
+    let raf = 0;
+    let done = false;
+    let disposed = false;
+
+    const schedule = (cell: number, at: number, until: number) => {
+      grid.start[cell] = at;
+      grid.touched[cell] = until;
     };
 
     /** Queue the buckets around a point. Nearer buckets render first, with a little jitter. */
-    const touchCircle = (x: number, y: number, radius: number, now: number) => {
-      const c0 = Math.max(0, Math.floor((x - radius) / CELL));
-      const c1 = Math.min(grid.cols - 1, Math.floor((x + radius) / CELL));
-      const r0 = Math.max(0, Math.floor((y - radius) / CELL));
-      const r1 = Math.min(grid.rows - 1, Math.floor((y + radius) / CELL));
+    const touchCircle = (x: number, y: number, now: number) => {
+      const c0 = Math.max(0, Math.floor((x - RADIUS) / CELL));
+      const c1 = Math.min(grid.cols - 1, Math.floor((x + RADIUS) / CELL));
+      const r0 = Math.max(0, Math.floor((y - RADIUS) / CELL));
+      const r1 = Math.min(grid.rows - 1, Math.floor((y + RADIUS) / CELL));
       for (let r = r0; r <= r1; r++) {
         for (let c = c0; c <= c1; c++) {
-          const dx = (c + 0.5) * CELL - x;
-          const dy = (r + 0.5) * CELL - y;
-          const dist = Math.hypot(dx, dy);
-          if (dist > radius) continue;
-          const index = r * grid.cols + c;
-          if (heatAt(grid, index, now) <= 0) {
-            grid.start[index] = now + (reduce ? 0 : (dist / radius) * 90 + Math.random() * 70);
-          }
-          grid.touched[index] = Math.max(grid.start[index], now);
+          const dist = Math.hypot((c + 0.5) * CELL - x, (r + 0.5) * CELL - y);
+          if (dist > RADIUS) continue;
+          const i = r * grid.cols + c;
+          const queued = heatAt(grid, i, now) > 0 || grid.start[i] > now;
+          const start = queued ? grid.start[i] : now + (reduce ? 0 : (dist / RADIUS) * 90 + Math.random() * 70);
+          schedule(i, start, Math.max(start, now, grid.touched[i]));
         }
       }
     };
 
     const touchRect = (rect: DOMRect, now: number) => {
-      const pad = CELL;
-      const c0 = Math.max(0, Math.floor((rect.left - pad) / CELL));
-      const c1 = Math.min(grid.cols - 1, Math.floor((rect.right + pad) / CELL));
-      const r0 = Math.max(0, Math.floor((rect.top - pad) / CELL));
-      const r1 = Math.min(grid.rows - 1, Math.floor((rect.bottom + pad) / CELL));
+      const c0 = Math.max(0, Math.floor((rect.left - CELL) / CELL));
+      const c1 = Math.min(grid.cols - 1, Math.floor((rect.right + CELL) / CELL));
+      const r0 = Math.max(0, Math.floor((rect.top - CELL) / CELL));
+      const r1 = Math.min(grid.rows - 1, Math.floor((rect.bottom + CELL) / CELL));
       for (let r = r0; r <= r1; r++) {
         for (let c = c0; c <= c1; c++) {
-          const index = r * grid.cols + c;
-          if (heatAt(grid, index, now) <= 0) grid.start[index] = now + (reduce ? 0 : Math.random() * 120);
-          grid.touched[index] = Math.max(grid.start[index], now);
+          const i = r * grid.cols + c;
+          const start = heatAt(grid, i, now) > 0 ? grid.start[i] : now + (reduce ? 0 : Math.random() * 120);
+          schedule(i, start, Math.max(start, now, grid.touched[i]));
         }
       }
+    };
+
+    const resize = () => {
+      vw = window.innerWidth;
+      vh = window.innerHeight;
+      dpr = Math.min(2, window.devicePixelRatio || 1);
+      buckets.width = Math.round(vw * dpr);
+      buckets.height = Math.round(vh * dpr);
+      const next = makeGrid(vw, vh);
+      // Keep what was rendered where the old grid still overlaps.
+      for (let r = 0; r < Math.min(grid.rows, next.rows); r++) {
+        for (let c = 0; c < Math.min(grid.cols, next.cols); c++) {
+          next.start[r * next.cols + c] = grid.start[r * grid.cols + c];
+          next.touched[r * next.cols + c] = grid.touched[r * grid.cols + c];
+        }
+      }
+      grid = next;
+      heat = new Uint8Array(grid.cols * grid.rows);
+      scene?.resize(vw, vh, dpr, grid.cols, grid.rows, CELL);
+      sizeDirty = false;
     };
 
     const draw = (now: number) => {
       raf = 0;
-      frame++;
-      const data = image.data;
-      let live = false;
-      bucketCtx.clearRect(0, 0, buckets.width, buckets.height);
-      if (!reduce) {
-        bucketCtx.lineWidth = Math.max(1, dpr);
-        bucketCtx.strokeStyle = "rgba(255, 255, 255, 0.95)";
-        bucketCtx.shadowColor = "rgba(0, 0, 0, 0.45)";
-        bucketCtx.shadowBlur = 2 * dpr;
-        bucketCtx.beginPath();
+      if (!scene) return;
+      if (sizeDirty) resize();
+      if (layoutDirty) {
+        scene.setShapes(collectShapes(root, vw, vh));
+        layoutDirty = false;
       }
+
+      let live = false;
+      let allRendered = true;
       for (let i = 0; i < grid.cols * grid.rows; i++) {
         const start = grid.start[i];
-        const heat = heatAt(grid, i, now);
-        if (start && (heat > 0 || now < start)) live = true;
-        // Opaque mask shows the grey veil. A rendered bucket clears it.
-        const p = i * 4;
-        data[p] = 0;
-        data[p + 1] = 0;
-        data[p + 2] = 0;
-        data[p + 3] = Math.round(255 * (1 - heat));
-        // Bucket corners while a bucket is rendering, like a renderer working through tiles.
-        if (!reduce && start && now >= start - 50 && now < start + RISE_MS + 40) {
-          const x = (i % grid.cols) * CELL * dpr + 2 * dpr;
-          const y = Math.floor(i / grid.cols) * CELL * dpr + 2 * dpr;
-          const s = (CELL - 4) * dpr;
-          const k = 5 * dpr;
-          bucketCtx.moveTo(x, y + k);
-          bucketCtx.lineTo(x, y);
-          bucketCtx.lineTo(x + k, y);
-          bucketCtx.moveTo(x + s - k, y);
-          bucketCtx.lineTo(x + s, y);
-          bucketCtx.lineTo(x + s, y + k);
-          bucketCtx.moveTo(x + s, y + s - k);
-          bucketCtx.lineTo(x + s, y + s);
-          bucketCtx.lineTo(x + s - k, y + s);
-          bucketCtx.moveTo(x + k, y + s);
-          bucketCtx.lineTo(x, y + s);
-          bucketCtx.lineTo(x, y + s - k);
-        }
+        const h = heatAt(grid, i, now);
+        heat[i] = Math.round(h * 255);
+        if (h < 1) allRendered = false;
+        if (start && (now < start || (h > 0 && !(h >= 1 && grid.touched[i] === Infinity)))) live = true;
       }
-      if (!reduce) bucketCtx.stroke();
-      if (!live) {
-        grid.start.fill(0);
-        grid.touched.fill(0);
-        setMask("");
+      scene.render(heat);
+      // The canvas starts grey in CSS so nothing flashes before the scene draws. Holes need it clear.
+      canvas.style.background = "transparent";
+
+      // Bucket corners while a bucket renders, like a renderer working through tiles.
+      bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      bctx.clearRect(0, 0, vw, vh);
+      if (!reduce) {
+        bctx.lineWidth = 1.25;
+        bctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+        bctx.beginPath();
+        for (let i = 0; i < grid.cols * grid.rows; i++) {
+          const start = grid.start[i];
+          if (!start || now < start - 50 || now > start + RISE_MS + 40) continue;
+          live = true;
+          const x = (i % grid.cols) * CELL + 2.5;
+          const y = Math.floor(i / grid.cols) * CELL + 2.5;
+          const s = CELL - 5;
+          const k = 5;
+          bctx.moveTo(x, y + k);
+          bctx.lineTo(x, y);
+          bctx.lineTo(x + k, y);
+          bctx.moveTo(x + s - k, y);
+          bctx.lineTo(x + s, y);
+          bctx.lineTo(x + s, y + k);
+          bctx.moveTo(x + s, y + s - k);
+          bctx.lineTo(x + s, y + s);
+          bctx.lineTo(x + s - k, y + s);
+          bctx.moveTo(x + k, y + s);
+          bctx.lineTo(x, y + s);
+          bctx.lineTo(x, y + s - k);
+        }
+        bctx.stroke();
+      }
+
+      if (touchOnly && allRendered && !live) {
+        done = true;
+        hide();
+        scene.dispose();
+        scene = null;
         return;
       }
-      if (frame % MASK_EVERY === 0) {
-        smallCtx.putImageData(image, 0, 0);
-        bigCtx.imageSmoothingEnabled = false;
-        bigCtx.clearRect(0, 0, big.width, big.height);
-        bigCtx.drawImage(small, 0, 0, big.width, big.height);
-        setMask(big.toDataURL("image/png"));
-      }
-      raf = requestAnimationFrame(draw);
+      if (live || layoutDirty || sizeDirty) raf = requestAnimationFrame(draw);
     };
 
     const wake = () => {
-      if (!raf) raf = requestAnimationFrame(draw);
+      if (!done && !raf && scene) raf = requestAnimationFrame(draw);
     };
-
+    const relayout = () => {
+      layoutDirty = true;
+      wake();
+    };
+    const onResize = () => {
+      sizeDirty = true;
+      relayout();
+    };
     const onMove = (event: PointerEvent) => {
-      touchCircle(event.clientX, event.clientY, RADIUS, performance.now());
+      if (touchOnly) return;
+      touchCircle(event.clientX, event.clientY, performance.now());
       wake();
     };
     const onFocus = (event: FocusEvent) => {
@@ -197,41 +219,71 @@ function RenderReveal() {
       touchRect(target.getBoundingClientRect(), performance.now());
       wake();
     };
-    const onResize = () => {
-      size();
-      wake();
-    };
 
-    size();
-    if (!reduce) {
-      // One diagonal render pass on load, so it's clear there is a finished version under the grey.
-      const now = performance.now() + 350;
-      for (let r = 0; r < grid.rows; r++) {
-        for (let c = 0; c < grid.cols; c++) {
-          const index = r * grid.cols + c;
-          grid.start[index] = now + (c + r) * 14 + Math.random() * 40;
-          grid.touched[index] = grid.start[index] + RISE_MS;
+    const observer = new MutationObserver(relayout);
+    const resizer = new ResizeObserver(relayout);
+
+    import("@/components/blockout-three")
+      .then(({ createBlockout }) => {
+        if (disposed) return;
+        try {
+          scene = createBlockout(canvas);
+        } catch {
+          // No WebGL: show the finished UI.
+          hide();
+          return;
         }
-      }
-      wake();
-    }
+        resize();
+        if (!reduce) {
+          // One diagonal render pass on load, so it's clear there is a finished UI under the blocks.
+          const now = performance.now() + 600;
+          for (let r = 0; r < grid.rows; r++) {
+            for (let c = 0; c < grid.cols; c++) {
+              const at = now + (c + r) * 16 + Math.random() * 40;
+              schedule(r * grid.cols + c, at, touchOnly ? Infinity : at + RISE_MS);
+            }
+          }
+        }
+        observer.observe(root, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+          attributes: true,
+          attributeFilter: ["class", "style", "value", "src", "disabled"],
+        });
+        resizer.observe(root);
+        document.fonts?.ready.then(relayout).catch(() => {});
+        relayout();
+      })
+      .catch((error) => {
+        console.error("Reverse 3D blockout failed", error);
+        hide();
+      });
 
     window.addEventListener("pointermove", onMove, { passive: true });
     window.addEventListener("pointerdown", onMove, { passive: true });
     window.addEventListener("focusin", onFocus);
     window.addEventListener("resize", onResize);
+    window.addEventListener("scroll", relayout, { passive: true, capture: true });
+    window.addEventListener("input", relayout, { passive: true });
     return () => {
+      disposed = true;
       cancelAnimationFrame(raf);
+      observer.disconnect();
+      resizer.disconnect();
+      scene?.dispose();
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerdown", onMove);
       window.removeEventListener("focusin", onFocus);
       window.removeEventListener("resize", onResize);
+      window.removeEventListener("scroll", relayout, { capture: true });
+      window.removeEventListener("input", relayout);
     };
   }, []);
 
   return (
     <>
-      <div className="vp-veil" ref={veilRef} aria-hidden="true" />
+      <canvas className="vp-clay" ref={canvasRef} aria-hidden="true" />
       <canvas className="vp-buckets" ref={bucketsRef} aria-hidden="true" />
     </>
   );
@@ -283,12 +335,13 @@ export function ViewportShell({ children }: { children: ReactNode }) {
       </div>
       {children}
       <div className="vp-hud" aria-hidden="true">
+        <span className="vp-hint">Move the cursor to render</span>
         <span className="vp-hud-br">
           Frame <b><FrameCounter /></b> · 24 fps
         </span>
         <AxisGizmo />
       </div>
-      <RenderReveal />
+      <Blockout />
     </div>
   );
 }

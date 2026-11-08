@@ -70,6 +70,8 @@ export function Studio({
   configured,
   notice = null,
   menu = null,
+  brand = "Comfy API Apps",
+  hero = true,
 }: {
   apps: CatalogApp[];
   mock: boolean;
@@ -77,6 +79,10 @@ export function Studio({
   notice?: string | null;
   /** Optional row between the brand and the header actions. */
   menu?: ReactNode;
+  /** Name shown next to the logo. */
+  brand?: string;
+  /** Show the big title above the card. */
+  hero?: boolean;
 }) {
   const count = apps.length;
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -328,17 +334,19 @@ export function Studio({
                 />
               </svg>
             </span>
-            <span className="brand-word">Comfy API Apps</span>
+            <span className="brand-word">{brand}</span>
           </div>
           {menu}
           <div className="header-actions">{mock ? <span className="mockpill">Mock mode</span> : null}</div>
         </div>
       </header>
       <main className="page">
-        <div className="hero">
-          <h1>{current?.name}</h1>
-          <p>Fun apps powered by ComfyUI</p>
-        </div>
+        {hero ? (
+          <div className="hero">
+            <h1>{current?.name}</h1>
+            <p>Fun apps powered by ComfyUI</p>
+          </div>
+        ) : null}
         {!mock && !configured ? (
           <p className="warn">Set COMFY_API_KEY or COMFY_CLOUD_API_KEY on the server to run live jobs, or COMFY_MOCK=1 for sample output.</p>
         ) : null}
