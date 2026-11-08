@@ -496,6 +496,23 @@
 .vp .r3d-build::after { content: none; }
 .block-build { position: absolute; inset: 0; }
 .block-build-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.block-build-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 3;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(20, 16, 24, 0.72);
+  color: #fff;
+  font-family: var(--vp-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.block-build-label[data-on] { opacity: 1; }
 .r3d-status {
   position: absolute;
   left: 50%;

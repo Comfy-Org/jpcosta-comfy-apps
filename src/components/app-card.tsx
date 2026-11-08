@@ -7,7 +7,7 @@ import { FORM_BUDGET_BYTES, VIDEO_FORM_BUDGET_BYTES, imageRejectReason, packImag
 import { clientFailureMessage, fetchBlobRetrying, type ClientStep } from "@/lib/client-fetch";
 import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
 import { requestSubjectModel, sampleSceneFrames, type SceneModel } from "@/lib/scene-client";
-import { buildPartBoxes, SCENE_POLYGON_DEFAULT } from "@/lib/scene-mesh";
+import { SCENE_POLYGON_DEFAULT } from "@/lib/scene-mesh";
 import { BlockBuild } from "@/components/block-build";
 import { LILAC, TERMINAL_STATUSES, type CatalogApp, type CatalogImage, type JobView, type RunResponse, type TextControl } from "@/lib/types";
 import { AppIcon } from "@/components/app-icon";
@@ -63,6 +63,9 @@ type Recovery = {
   sig?: string;
 };
 
+/** Longest the video job waits for the 3D toy's job to be queued ahead of it. */
+const TOY_HEAD_START_MS = 20_000;
+
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     const timer = setTimeout(resolve, ms);
@@ -110,8 +113,13 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
   const [pick, setPick] = useState<Step | null>(null);
   /** Steps layout: the result the build animation has finished for, so the result step can open. */
   const [shownId, setShownId] = useState<string | null>(null);
-  /** Steps layout: start the job on its own once the 3D subject is ready. */
+  /** Steps layout: start the job on its own once the clip is ready. */
   const autoRun = useRef(false);
+  /**
+   * Steps layout: the 3D toy's job is on the deployment, or gave up. The video job waits for this,
+   * so the few-second toy job is not stuck behind the minutes-long render on the same deployment.
+   */
+  const [toyQueued, setToyQueued] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const sceneToken = useRef(0);
   const sceneOrbitRef = useRef<SceneOrbitHandle | null>(null);
@@ -242,6 +250,7 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
           setScene(null);
           setPolygonCount(0);
           setSceneState("building");
+          setToyQueued(false);
           setNeed("Checking the clip…");
           try {
             const prepared = await prepareReverse3dUpload(file);
@@ -264,9 +273,16 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
             setNeed("Asking which frame shows the subject…");
             const sampled = await sampleSceneFrames(prepared.file, prepared.duration);
             if (token !== sceneToken.current) return;
-            const picked = await requestSubjectModel(sampled.frames, sampled.times, (message) => {
-              if (token === sceneToken.current) setNeed(message);
-            });
+            const picked = await requestSubjectModel(
+              sampled.frames,
+              sampled.times,
+              (message) => {
+                if (token === sceneToken.current) setNeed(message);
+              },
+              () => {
+                if (token === sceneToken.current) setToyQueued(true);
+              },
+            );
             if (token !== sceneToken.current) return;
             setScene(picked);
             setSceneState("ready");
@@ -279,6 +295,7 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
             if (token !== sceneToken.current) return;
             setScene(null);
             setSceneState("error");
+            setToyQueued(true);
             setNeed(err instanceof Error ? err.message : "Could not read that video.");
           }
           return;
@@ -734,24 +751,23 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
       />
     ) : null;
 
-  const parts = useMemo(() => {
-    if (!scene) return null;
-    try {
-      return buildPartBoxes(scene.positions, scene.indices);
-    } catch {
-      return null;
-    }
-  }, [scene]);
+  const parts = scene?.parts ?? null;
 
-  // Steps layout: the video job starts as soon as the clip is prepared. The 3D subject is made in parallel
-  // and is only the loading screen, so the job never waits for it.
+  // Steps layout: the video job starts once the clip is prepared and the toy's job is queued ahead of it.
+  // The toy is only the loading screen, so the video never waits for it to finish, and waits at most a few seconds to queue.
   useEffect(() => {
-    if (layout !== "steps" || !autoRun.current || !uploads.video || busy) return;
+    if (layout !== "steps" || !uploads.video || toyQueued) return;
+    const timer = window.setTimeout(() => setToyQueued(true), TOY_HEAD_START_MS);
+    return () => window.clearTimeout(timer);
+  }, [layout, uploads.video, toyQueued]);
+
+  useEffect(() => {
+    if (layout !== "steps" || !autoRun.current || !uploads.video || !toyQueued || busy) return;
     autoRun.current = false;
     void run();
-    // run reads the latest uploads from this render; it should fire once when the clip is ready.
+    // run reads the latest uploads from this render; it should fire once when the clip and the toy job are ready.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layout, uploads.video]);
+  }, [layout, uploads.video, toyQueued]);
 
   const selectedScene = selectedToken ? `/api/paparazzi/scene?token=${encodeURIComponent(selectedToken)}` : "";
   const status = findingScene

@@ -18,6 +18,8 @@ type Live = {
 };
 
 const CLAY = 0xc9cbd1;
+/** Things around the subject, a shade darker so the subject reads first. */
+const PROP_CLAY = 0xa6aab4;
 const HOT = 0xf2ff59;
 /** Time between two blocks landing. */
 const GAP_MS = 650;
@@ -30,7 +32,7 @@ const easeOutBack = (t: number) => {
 
 /**
  * The loading screen: while the video renders, the subject is assembled from big blocks
- * (body, head, arms…) dropping in one by one. Drag to orbit, hover a block to lift it, click to knock it.
+ * (body, head, arms…) dropping in one by one. Drag to orbit, hover a block to lift it and see its name, click to knock it.
  */
 export function BlockBuild({ parts, done, onFinished }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -122,6 +124,8 @@ export function BlockBuild({ parts, done, onFinished }: Props) {
       type Block = {
         mesh: InstanceType<typeof THREE.Mesh>;
         material: InstanceType<typeof THREE.MeshStandardMaterial>;
+        base: InstanceType<typeof THREE.Color>;
+        name: string;
         home: InstanceType<typeof THREE.Vector3>;
         height: number;
         startAt: number;
@@ -138,8 +142,14 @@ export function BlockBuild({ parts, done, onFinished }: Props) {
       let finished = false;
       let hovered: Block | null = null;
       const clay = new THREE.Color(CLAY);
+      const propClay = new THREE.Color(PROP_CLAY);
       const hot = new THREE.Color(HOT);
       const dummy = new THREE.Object3D();
+      const label = document.createElement("span");
+      label.className = "block-build-label";
+      label.setAttribute("aria-hidden", "true");
+      host.appendChild(label);
+      const labelAt = new THREE.Vector3();
 
       function clearBlocks() {
         for (const block of blocks) {
@@ -166,7 +176,8 @@ export function BlockBuild({ parts, done, onFinished }: Props) {
           const [w, h, d] = box.size;
           const gap = Math.min(w, h, d) * 0.03;
           const radius = Math.min(w, h, d) * 0.12;
-          const material = new THREE.MeshStandardMaterial({ color: CLAY, roughness: 0.8 });
+          const base = box.kind === "prop" ? propClay : clay;
+          const material = new THREE.MeshStandardMaterial({ color: base, roughness: 0.8 });
           const mesh = new THREE.Mesh(new RoundedBoxGeometry(w - gap, h - gap, d - gap, 3, radius), material);
           mesh.castShadow = true;
           mesh.receiveShadow = true;
@@ -175,6 +186,8 @@ export function BlockBuild({ parts, done, onFinished }: Props) {
           blocks.push({
             mesh,
             material,
+            base,
+            name: box.name ?? "",
             home: new THREE.Vector3(box.center[0], box.center[1], box.center[2]),
             height: h,
             startAt: reduce ? now - DROP_MS : now + 250 + slot * GAP_MS,
@@ -184,6 +197,31 @@ export function BlockBuild({ parts, done, onFinished }: Props) {
           });
         });
         floor.position.y = next.floorY;
+        // Frame the whole layout: a lone figure stays close, a figure with a wall behind it pulls back.
+        let radius = 0;
+        for (const box of next.boxes) {
+          const [x, y, z] = box.center;
+          const [w, h, d] = box.size;
+          radius = Math.max(radius, Math.hypot(Math.abs(x) + w / 2, Math.abs(y) + h / 2, Math.abs(z) + d / 2));
+        }
+        fit = radius || 0.9;
+        frame();
+      }
+
+      /** Distance at which a sphere of radius `fit` fills the view, measured along the narrower side. */
+      let fit = 0.9;
+      const viewDir = new THREE.Vector3(2.6, 1.45, 3.4).normalize();
+      function frame() {
+        const half = THREE.MathUtils.degToRad(camera.fov / 2);
+        const narrow = Math.min(half, Math.atan(Math.tan(half) * camera.aspect));
+        const distance = Math.min(9, Math.max(3.8, (fit / Math.sin(narrow)) * 0.9));
+        const offset = camera.position.clone().sub(controls.target);
+        const dir = offset.lengthSq() > 0 ? offset.normalize() : viewDir.clone();
+        // Aim a little low so the blocks sit above the status card.
+        controls.target.set(0, -0.05 - fit * 0.12, 0);
+        camera.position.copy(controls.target).addScaledVector(dir, distance);
+        controls.minDistance = distance * 0.6;
+        controls.maxDistance = distance * 1.7;
       }
 
       function setDone(next: boolean) {
@@ -197,6 +235,7 @@ export function BlockBuild({ parts, done, onFinished }: Props) {
         camera.aspect = width / height;
         camera.fov = width < height ? 44 : 32;
         camera.updateProjectionMatrix();
+        frame();
       }
       resize();
       const observer = new ResizeObserver(resize);
@@ -276,7 +315,19 @@ export function BlockBuild({ parts, done, onFinished }: Props) {
           block.mesh.position.set(block.home.x, block.home.y + fall + block.lift * 0.08 + hop, block.home.z);
           block.mesh.rotation.set(0, block.spin * block.knock * Math.PI * 2, (1 - k) * 0.35);
           block.mesh.scale.setScalar(Math.min(1, k * 1.8));
-          block.material.color.copy(clay).lerp(hot, Math.max(block.lift, block.knock));
+          block.material.color.copy(block.base).lerp(hot, Math.max(block.lift, block.knock));
+        }
+
+        // The hovered block's name, floating just above it.
+        if (hovered?.name && hovered.mesh.visible) {
+          labelAt.set(hovered.mesh.position.x, hovered.mesh.position.y + hovered.height / 2, hovered.mesh.position.z).project(camera);
+          const x = (labelAt.x * 0.5 + 0.5) * host!.clientWidth;
+          const y = (1 - (labelAt.y * 0.5 + 0.5)) * host!.clientHeight;
+          if (label.textContent !== hovered.name) label.textContent = hovered.name;
+          label.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px) translate(-50%, -140%)`;
+          label.dataset.on = "1";
+        } else if (label.dataset.on) {
+          delete label.dataset.on;
         }
 
         if (settled && isDone && !finished && !finishTimer) {
@@ -308,6 +359,7 @@ export function BlockBuild({ parts, done, onFinished }: Props) {
           idleMat.dispose();
           renderer.dispose();
           canvas.remove();
+          label.remove();
         },
       };
       setParts(latest.current.parts);
