@@ -199,7 +199,7 @@ export async function POST(request: Request) {
           frame: scene.frame,
           subject: scene.subject,
           time: times[scene.frame] ?? 0,
-          blocks: scene.blocks,
+          reply: MOCK_SCENE_REPLY,
           pick: workflow,
         });
       }

@@ -10,29 +10,21 @@ export const SUBJECT_FRAME_CAP = 12;
 export const MESH_KEEP_FRACTION = 0.3;
 
 export const SUBJECT_PROMPT = `These {count} images are frames from one clip, in order. Image 1 is the earliest.
-This shot will be rebuilt as a toy made of a few big grey blocks, like a 3D blockout.
+The shot will be rebuilt as a grey 3D blockout seen from the same camera, so every block has to sit exactly on the part it stands for in the frame.
 
-1. Name the single main subject, the person, animal or object the clip is about.
-2. Choose the one frame where that subject is easiest to see: large, unobstructed, and not blurred.
-3. In that frame, describe the subject as 5 to 12 big blocks, one per part. For a person: head, torso, hips, upper arms, forearms, thighs, shins. For a car: body, cabin, wheels. Match the pose and the proportions you see.
-4. Add 0 to 4 big blocks for the largest things right next to the subject, such as a table, a chair, a wall, a car or a rock. Skip the sky, the ground itself and anything small.
+1. Name the single main subject: the person, animal or object the clip is about.
+2. Choose the frame where the subject is easiest to see: large, sharp, whole and not hidden.
+3. In that frame, split the subject into 5 to 14 parts that each read as one box. For a person: head, torso, hips, upper arms, forearms, thighs, shins, and hands or feet when they are clearly visible. For an animal: head, neck, body, legs, tail. For a vehicle: body, cabin, wheels. For a simple object: a few big pieces.
+   Mark each part's long axis with two points through the middle of the part: "a" at one end and "b" at the other. For a forearm: elbow to wrist. For a torso: the base of the neck to the waist. For a head: the chin to the top of the head. Follow the pose exactly as it is in the frame.
+   "w" is the part's width across that axis divided by the axis length. "d" is its depth along the camera's view divided by that width (1 = as deep as it is wide). "z" is 1 when the part is clearly closer to the camera than the body, -1 when it is clearly farther, otherwise 0.
+4. Add up to 3 other solid objects that the subject touches, holds or stands right beside, at about the same distance from the camera: a chair they sit on, a table they lean on, a bike they ride, a board they carry. Never the floor, a wall, the sky, a building, a tree, or anything farther back.
+   Mark each one like a part: "a" and "b" at the two ends of its longest side as it looks in the frame, through its middle, so a board held at a slant gets a slanted axis. Give "w", "d" and "z" as above, with "z" compared with the subject.
+Points are [y, x], normalized to 0-1000 on the chosen frame.
 
-Coordinates, as seen from the camera of that frame:
-- The subject is 1 unit tall.
-- y points up, and y = 0 is the ground under the subject.
-- x points to the right of the image, z points toward the camera.
-- The subject is centred on x = 0, z = 0.
-Each block is a box that is not rotated. Give the x of its centre, the y of its bottom, the z of its centre, then its width along x, height along y and depth along z. Blocks may touch or overlap a little. Nothing goes below y = 0.
+Reply with JSON only, in this shape:
+{"frame": <integer from 1 to {count}>, "subject": "<short name>", "parts": [{"name": "head", "a": [y, x], "b": [y, x], "w": 0.8, "d": 1, "z": 0}], "props": [{"name": "table", "a": [y, x], "b": [y, x], "w": 0.6, "d": 1, "z": -1}]}`;
 
-Reply with only these lines and no other text:
-frame: <integer from 1 to {count}>
-subject: <a short name>
-part: <name> | <x> <bottom y> <z> | <width> <height> <depth>
-prop: <name> | <x> <bottom y> <z> | <width> <height> <depth>
-Write one part line per subject block and one prop line per block around it. For example:
-part: head | 0 0.86 0 | 0.15 0.14 0.16`;
-
-/** Gemini looks at every sampled frame, picks the subject and the frame, and lays the shot out as blocks. */
+/** Gemini looks at every sampled frame, picks the subject and the frame, and marks its parts on that frame. */
 export function buildPickWorkflow(frameCount: number): Workflow {
   const count = Math.max(1, Math.min(SUBJECT_FRAME_CAP, Math.round(frameCount)));
   const workflow: Workflow = {};
@@ -41,11 +33,11 @@ export function buildPickWorkflow(frameCount: number): Workflow {
     model: "Gemini 3.5 Flash",
     "model.prompt": prompt,
     // LOW leaves a little room to reason about the pose and stays a few seconds long.
-    // The cap includes thinking, so it stays well above the 20 short lines of the answer.
+    // The cap includes thinking, so it stays well above the short JSON answer.
     "model.thinking_level": "LOW",
-    "model.max_output_tokens": 4096,
+    "model.max_output_tokens": 8192,
     "model.seed": 0,
-    "model.system_prompt": "You turn a video shot into a simple 3D blockout made of boxes. Reply only in the exact line format you are given.",
+    "model.system_prompt": "You mark the parts of a video's main subject on one frame, precisely, so a 3D blockout can be built over it. Reply with JSON only.",
     "model.temperature": 0,
     "model.top_p": 0.95,
   };
@@ -61,7 +53,7 @@ export function buildPickWorkflow(frameCount: number): Workflow {
   workflow["20"] = {
     class_type: "GeminiNodeV3",
     inputs: gemini,
-    _meta: { title: "Pick the subject and lay it out as blocks" },
+    _meta: { title: "Pick the subject and mark its parts" },
   };
   workflow["21"] = {
     class_type: "SaveText",
@@ -70,7 +62,7 @@ export function buildPickWorkflow(frameCount: number): Workflow {
       filename_prefix: "reverse-3d/subject",
       format: "txt",
     },
-    _meta: { title: "Subject and blocks" },
+    _meta: { title: "Subject and parts" },
   };
   return workflow;
 }
@@ -270,11 +262,11 @@ export type SubjectChoice = {
   subject: string;
 };
 
-/** Read the two-line reply. A missing frame number is not a guess from the pixels. */
+/** Read the frame and the subject, from lines or JSON keys. A missing frame number is not a guess from the pixels. */
 export function parseSubjectChoice(text: string, frameCount: number): SubjectChoice {
   const count = Math.max(1, Math.min(SUBJECT_FRAME_CAP, Math.round(frameCount)));
-  const frameMatch = /frame\s*[:=]\s*(\d+)/i.exec(text);
-  const subjectMatch = /subject\s*[:=]\s*([^\n\r]+)/i.exec(text);
+  const frameMatch = /frame"?\s*[:=]\s*"?(\d+)/i.exec(text);
+  const subjectMatch = /subject"?\s*[:=]\s*"?([^"\n\r]+)/i.exec(text);
   if (!frameMatch) throw new Error("The model did not choose a frame.");
   const frame = Number(frameMatch[1]);
   if (!Number.isInteger(frame) || frame < 1 || frame > count) {
@@ -285,85 +277,151 @@ export function parseSubjectChoice(text: string, frameCount: number): SubjectCho
   return { frame: frame - 1, subject };
 }
 
-/** One box from the model, in subject units: the subject is 1 tall and stands on y = 0. */
-export type SceneBlock = {
+/** A point on the chosen frame: [y, x], each 0-1000. */
+export type FramePoint = [number, number];
+
+/** One part of the subject as the model marked it on the chosen frame. */
+export type FramePart = {
   name: string;
-  /** A piece of the subject, or something next to it. */
-  kind: "part" | "prop";
-  x: number;
-  /** Height of the box's bottom above the ground. */
-  bottom: number;
-  z: number;
-  width: number;
-  height: number;
-  depth: number;
+  /** The two ends of the part's long axis. */
+  a: FramePoint;
+  b: FramePoint;
+  /** Width across the axis, divided by the axis length. */
+  w: number;
+  /** Depth along the camera's view, divided by the width. */
+  d: number;
+  /** 1 closer to the camera than the body, -1 farther, 0 level with it. */
+  z: -1 | 0 | 1;
 };
 
-export type SubjectScene = SubjectChoice & { blocks: SceneBlock[] };
+/** Something next to the subject: marked like a part along its longest side, or as a plain box. */
+export type FrameProp = {
+  name: string;
+  /** The two ends of its longest side, and its width across that side divided by the side's length. */
+  a?: FramePoint;
+  b?: FramePoint;
+  w?: number;
+  /** Used when there is no a and b: [ymin, xmin, ymax, xmax], each 0-1000. */
+  box?: [number, number, number, number];
+  /** Depth along the camera's view, divided by the width. */
+  d: number;
+  /** 1 in front of the subject, -1 behind it, 0 level with it. */
+  z: -1 | 0 | 1;
+};
 
-const MAX_PARTS = 14;
-const MAX_PROPS = 4;
-const BLOCK_LINE = /^[\s*>-]*(part|prop)\s*:\s*([^|\n\r]*)\|([^|\n\r]+)\|([^\n\r]+)$/gim;
+export type SubjectScene = SubjectChoice & { parts: FramePart[]; props: FrameProp[] };
 
-function blockNumbers(text: string): number[] {
-  return text
-    .replace(/[()[\]`]/g, " ")
-    .split(/[\s,;]+/)
-    .filter(Boolean)
-    .map(Number);
+const MAX_PARTS = 16;
+const MAX_PROPS = 3;
+
+const unit = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? Math.min(1000, Math.max(0, value)) : null);
+
+function framePoint(value: unknown): FramePoint | null {
+  if (!Array.isArray(value) || value.length < 2) return null;
+  const y = unit(value[0]);
+  const x = unit(value[1]);
+  return y === null || x === null ? null : [y, x];
+}
+
+function ratio(value: unknown, fallback: number, max: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.min(max, Math.max(0.05, value)) : fallback;
+}
+
+function label(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, 40) : fallback;
+}
+
+function side(value: unknown): -1 | 0 | 1 {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.max(-1, Math.min(1, Math.round(value))) as -1 | 0 | 1;
+}
+
+function readPart(item: Record<string, unknown>): FramePart | null {
+  const a = framePoint(item.a);
+  const b = framePoint(item.b);
+  if (!a || !b || Math.hypot(a[0] - b[0], a[1] - b[1]) < 4) return null;
+  return { name: label(item.name, "part"), a, b, w: ratio(item.w, 0.4, 3), d: ratio(item.d, 0.8, 4), z: side(item.z) };
+}
+
+function readProp(item: Record<string, unknown>): FrameProp | null {
+  const a = framePoint(item.a);
+  const b = framePoint(item.b);
+  if (a && b) {
+    if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 4) return null;
+    return { name: label(item.name, "prop"), a, b, w: ratio(item.w, 0.5, 3), d: ratio(item.d, 0.8, 4), z: side(item.z) };
+  }
+  const raw = Array.isArray(item.box_2d) ? item.box_2d : Array.isArray(item.box) ? item.box : null;
+  if (!raw || raw.length < 4) return null;
+  const [y0, x0, y1, x1] = raw.slice(0, 4).map(unit);
+  if (y0 === null || x0 === null || y1 === null || x1 === null) return null;
+  const box: [number, number, number, number] = [Math.min(y0, y1), Math.min(x0, x1), Math.max(y0, y1), Math.max(x0, x1)];
+  if (box[2] - box[0] < 4 || box[3] - box[1] < 4) return null;
+  return { name: label(item.name, "prop"), box, d: ratio(item.d, 0.8, 4), z: side(item.z) };
+}
+
+function records(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object") : [];
 }
 
 /**
- * Read the frame, the subject and the block lines. Lines that do not parse are skipped,
- * so a reply that was cut short still gives the blocks it got to.
+ * Read the frame, the subject, the parts and the props from the model's JSON.
+ * A reply that was cut short still gives the parts it got to: each object is read on its own.
  */
 export function parseSubjectScene(text: string, frameCount: number): SubjectScene {
   const choice = parseSubjectChoice(text, frameCount);
-  const blocks: SceneBlock[] = [];
-  let parts = 0;
-  let props = 0;
-  for (const match of text.matchAll(BLOCK_LINE)) {
-    const kind = match[1]?.toLowerCase() === "prop" ? "prop" : "part";
-    const place = blockNumbers(match[3] ?? "");
-    const size = blockNumbers(match[4] ?? "");
-    if (place.length < 3 || size.length < 3) continue;
-    const [x, bottom, z] = place as [number, number, number];
-    const [width, height, depth] = size as [number, number, number];
-    if (![x, bottom, z, width, height, depth].every(Number.isFinite)) continue;
-    if (width <= 0 || height <= 0 || depth <= 0) continue;
-    if (kind === "part" ? parts >= MAX_PARTS : props >= MAX_PROPS) continue;
-    const clampSize = (value: number) => Math.min(6, Math.max(0.02, value));
-    const clampPlace = (value: number) => Math.min(6, Math.max(-6, value));
-    blocks.push({
-      name: (match[2] ?? "").trim().slice(0, 40) || (kind === "part" ? "part" : "prop"),
-      kind,
-      x: clampPlace(x),
-      bottom: Math.min(6, Math.max(0, bottom)),
-      z: clampPlace(z),
-      width: clampSize(width),
-      height: clampSize(height),
-      depth: clampSize(depth),
-    });
-    if (kind === "part") parts += 1;
-    else props += 1;
+  let partItems: Record<string, unknown>[] = [];
+  let propItems: Record<string, unknown>[] = [];
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  let whole: unknown = null;
+  if (start >= 0 && end > start) {
+    try {
+      whole = JSON.parse(text.slice(start, end + 1));
+    } catch {
+      whole = null;
+    }
   }
-  if (parts === 0) throw new Error("The model did not lay out any blocks.");
-  return { ...choice, blocks };
+  if (whole && typeof whole === "object") {
+    partItems = records((whole as Record<string, unknown>).parts);
+    propItems = records((whole as Record<string, unknown>).props);
+  } else {
+    // Props are marked like parts, so an object is a prop when it comes after the "props" key.
+    const propsAt = text.search(/"props"\s*:/);
+    for (const match of text.matchAll(/\{[^{}]*\}/g)) {
+      try {
+        const item = JSON.parse(match[0]) as unknown;
+        if (!item || typeof item !== "object") continue;
+        const record = item as Record<string, unknown>;
+        const isProp = "box_2d" in record || "box" in record || (propsAt >= 0 && (match.index ?? 0) > propsAt);
+        if (isProp) propItems.push(record);
+        else if ("a" in record && "b" in record) partItems.push(record);
+      } catch {
+        // A cut-off object at the end of the reply.
+      }
+    }
+  }
+  const parts = partItems.map(readPart).filter((part): part is FramePart => part !== null).slice(0, MAX_PARTS);
+  const props = propItems.map(readProp).filter((prop): prop is FrameProp => prop !== null).slice(0, MAX_PROPS);
+  if (parts.length === 0) throw new Error("The model did not mark any parts.");
+  return { ...choice, parts, props };
 }
 
-/** What the mock server says Gemini replied: a person waving next to a table. Not a model answer. */
-export const MOCK_SCENE_REPLY = `frame: 1
-subject: The main subject
-part: left shin | -0.075 0 0 | 0.1 0.27 0.12
-part: right shin | 0.075 0 0 | 0.1 0.27 0.12
-part: left thigh | -0.075 0.26 0 | 0.12 0.22 0.14
-part: right thigh | 0.075 0.26 0 | 0.12 0.22 0.14
-part: hips | 0 0.46 0 | 0.3 0.1 0.18
-part: torso | 0 0.55 0 | 0.32 0.28 0.2
-part: head | 0 0.85 0 | 0.15 0.15 0.16
-part: left upper arm | -0.2 0.56 0 | 0.08 0.26 0.08
-part: left forearm | -0.2 0.34 0.02 | 0.07 0.23 0.07
-part: right upper arm | 0.24 0.75 0 | 0.17 0.07 0.08
-part: right forearm | 0.35 0.75 0 | 0.07 0.21 0.07
-prop: table | 0.75 0 -0.15 | 0.6 0.42 0.5
-prop: wall | 0.1 0 -0.55 | 2 1.3 0.1`;
+/** What the mock server says Gemini replied: a person waving next to a table on a 16:9 frame. Not a model answer. */
+export const MOCK_SCENE_REPLY = JSON.stringify({
+  frame: 1,
+  subject: "The main subject",
+  parts: [
+    { name: "head", a: [262, 462], b: [168, 461], w: 0.85, d: 1, z: 0 },
+    { name: "torso", a: [282, 461], b: [475, 462], w: 0.62, d: 0.55, z: 0 },
+    { name: "hips", a: [470, 462], b: [540, 462], w: 1.45, d: 0.6, z: 0 },
+    { name: "left upper arm", a: [300, 426], b: [440, 412], w: 0.28, d: 1, z: 0 },
+    { name: "left forearm", a: [440, 412], b: [566, 420], w: 0.26, d: 1, z: 1 },
+    { name: "right upper arm", a: [300, 498], b: [240, 560], w: 0.34, d: 1, z: 0 },
+    { name: "right forearm", a: [240, 560], b: [128, 572], w: 0.3, d: 1, z: 0 },
+    { name: "left thigh", a: [540, 448], b: [700, 444], w: 0.38, d: 1, z: 0 },
+    { name: "left shin", a: [700, 444], b: [868, 442], w: 0.3, d: 1, z: 0 },
+    { name: "right thigh", a: [540, 476], b: [700, 486], w: 0.38, d: 1, z: 0 },
+    { name: "right shin", a: [700, 486], b: [868, 492], w: 0.3, d: 1, z: 0 },
+  ],
+  props: [{ name: "table", a: [690, 600], b: [690, 800], w: 0.7, d: 1.2, z: -1 }],
+});

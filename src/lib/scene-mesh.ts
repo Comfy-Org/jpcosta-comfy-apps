@@ -5,7 +5,7 @@
  * The slider only changes how big those boxes are.
  */
 
-import type { SceneBlock } from "@/lib/subject-pipeline";
+import type { FramePart, FramePoint, FrameProp } from "@/lib/subject-pipeline";
 
 export const SCENE_POLYGON_MIN = 64;
 export const SCENE_POLYGON_MAX = 4096;
@@ -404,12 +404,26 @@ export type PartBox = {
   name?: string;
   /** A piece of the subject, or something next to it. */
   kind?: "part" | "prop";
+  /** Turn about the camera's axis (z), in radians, so a limb follows the pose. */
+  rotation?: number;
+};
+
+/** Where the chosen frame hangs behind the blocks, so it lines up with them from the starting camera. */
+export type PlatePlacement = {
+  center: [number, number, number];
+  size: [number, number];
 };
 
 export type PartBoxes = {
   boxes: PartBox[];
   /** World height of the ground under the subject. */
   floorY: number;
+  /** The chosen frame behind the blocks. */
+  plate?: PlatePlacement;
+  /** The starting camera: level and straight on, like the shot. */
+  camera?: { target: [number, number, number]; distance: number };
+  /** The subject runs off the bottom of the frame, so there is no ground under it. */
+  cropped?: boolean;
 };
 
 /** Grid cells along the subject's longer side for the part split. Coarse on purpose. */
@@ -501,45 +515,140 @@ export function buildPartBoxes(positions: Float32Array, indices: ArrayLike<numbe
 
 /** World height of the subject in the loading build, the same as the old mesh volume. */
 const LAYOUT_SUBJECT_HEIGHT = 1.55;
-/** The whole layout, props included, stays inside this footprint and height so the camera keeps it in view. */
-const LAYOUT_MAX_SPAN = 2.7;
-const LAYOUT_MAX_HEIGHT = 1.9;
+/** Starting camera distance. The view is fitted with the lens, so this never changes and the frame stays lined up. */
+const SHOT_DISTANCE = 4.6;
+/** Aim a little below the subject's middle so it sits above the status card. */
+const SHOT_TARGET_Y = -0.18;
+/** Parts are drawn a little longer than joint to joint, so neighbours meet. */
+const PART_OVERLAP = 1.08;
+/** A prop's axis this close to level or plumb is straightened: about 12 degrees. */
+const PROP_STRAIGHTEN = 0.21;
 
 /**
- * Place the model's blocks in the loading scene: the subject 1.55 tall,
- * shrunk when the props spread wider, centred on the origin, standing on `floorY`.
+ * Build the blocks over the chosen frame.
+ * Each part is a box along the axis the model marked, turned to follow the pose. Seen from the
+ * starting camera (level, straight on), the boxes cover the subject in the frame, and the frame
+ * hangs behind them, scaled so it lines up. The subject is 1.55 tall and stands on `floorY`.
  */
-export function layoutSceneBlocks(blocks: readonly SceneBlock[]): PartBoxes {
-  if (blocks.length === 0) throw new Error("The model did not lay out any blocks.");
-  const parts = blocks.filter((block) => block.kind === "part");
-  const subjectTop = Math.max(...(parts.length ? parts : blocks).map((block) => block.bottom + block.height));
+export function layoutFrameScene(scene: { parts: readonly FramePart[]; props: readonly FrameProp[] }, aspect: number): PartBoxes {
+  if (scene.parts.length === 0) throw new Error("The model did not mark any parts.");
+  const wide = Number.isFinite(aspect) && aspect >= 0.25 && aspect <= 4 ? aspect : 16 / 9;
+  // Frame units: the frame is 1 tall and `wide` wide, centred on 0, with y up.
+  const toFrame = (point: FramePoint): [number, number] => [(point[1] / 1000 - 0.5) * wide, 0.5 - point[0] / 1000];
+  type Flat = { cx: number; cy: number; width: number; long: number; depth: number; angle: number; halfX: number; halfY: number };
+  /**
+   * A box on the frame along the axis from a to b. Its own y axis runs along the axis.
+   * With `upright`, an axis a few degrees off level or plumb is straightened, as tables and chairs are.
+   */
+  const alongAxis = (a: FramePoint, b: FramePoint, w: number, d: number, stretch: number, upright = false): Flat => {
+    const [ax, ay] = toFrame(a);
+    const [bx, by] = toFrame(b);
+    const length = Math.hypot(bx - ax, by - ay);
+    const width = length * w;
+    const long = length * stretch;
+    let angle = Math.atan2(-(bx - ax), by - ay);
+    const square = Math.round(angle / (Math.PI / 2)) * (Math.PI / 2);
+    if (upright && Math.abs(angle - square) < PROP_STRAIGHTEN) angle = square || 0;
+    const cos = Math.abs(Math.cos(angle));
+    const sin = Math.abs(Math.sin(angle));
+    return {
+      cx: (ax + bx) / 2,
+      cy: (ay + by) / 2,
+      width,
+      long,
+      depth: width * d,
+      angle,
+      halfX: (cos * width + sin * long) / 2,
+      halfY: (sin * width + cos * long) / 2,
+    };
+  };
+  const flats = scene.parts.map((part) => ({ part, ...alongAxis(part.a, part.b, part.w, part.d, PART_OVERLAP) }));
   let minX = Infinity;
   let maxX = -Infinity;
-  let minZ = Infinity;
-  let maxZ = -Infinity;
-  let top = 0;
-  for (const block of blocks) {
-    minX = Math.min(minX, block.x - block.width / 2);
-    maxX = Math.max(maxX, block.x + block.width / 2);
-    minZ = Math.min(minZ, block.z - block.depth / 2);
-    maxZ = Math.max(maxZ, block.z + block.depth / 2);
-    top = Math.max(top, block.bottom + block.height);
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const flat of flats) {
+    minX = Math.min(minX, flat.cx - flat.halfX);
+    maxX = Math.max(maxX, flat.cx + flat.halfX);
+    minY = Math.min(minY, flat.cy - flat.halfY);
+    maxY = Math.max(maxY, flat.cy + flat.halfY);
   }
-  const scale = Math.min(
-    LAYOUT_SUBJECT_HEIGHT / Math.max(0.2, subjectTop),
-    LAYOUT_MAX_SPAN / Math.max(0.01, maxX - minX, maxZ - minZ),
-    LAYOUT_MAX_HEIGHT / Math.max(0.01, top),
-  );
+  const subjectHeight = maxY - minY;
+  const scale = LAYOUT_SUBJECT_HEIGHT / Math.max(subjectHeight, (maxX - minX) / 1.8, 1e-3);
+  const floorY = -(subjectHeight * scale) / 2;
   const midX = (minX + maxX) / 2;
-  const midZ = (minZ + maxZ) / 2;
-  const floorY = -(top * scale) / 2;
-  const boxes = blocks.map((block): PartBox => ({
-    center: [(block.x - midX) * scale, floorY + (block.bottom + block.height / 2) * scale, (block.z - midZ) * scale],
-    size: [block.width * scale, block.height * scale, block.depth * scale],
-    name: block.name,
-    kind: block.kind,
-  }));
-  return { boxes, floorY };
+  const worldX = (x: number) => (x - midX) * scale;
+  const worldY = (y: number) => (y - minY) * scale + floorY;
+  const core = flats.reduce((best, flat) => (flat.width * flat.long > best.width * best.long ? flat : best));
+  const coreDepth = core.depth * scale;
+
+  // Everything is first drawn on the subject's plane (z = 0), where it lines up with the frame from the starting camera.
+  // A block moved off that plane slides along the camera's rays and is scaled with them, so from the starting
+  // camera it still covers exactly what it covered on the frame. Only when the camera moves does the depth show.
+  const target: [number, number, number] = [0, SHOT_TARGET_Y, 0];
+  const place = (flat: Flat, z: number, depth: number, name: string, kind: "part" | "prop", alignZ = z): PartBox => {
+    const k = (SHOT_DISTANCE - alignZ) / SHOT_DISTANCE;
+    return {
+      center: [target[0] + (worldX(flat.cx) - target[0]) * k, target[1] + (worldY(flat.cy) - target[1]) * k, z],
+      size: [flat.width * scale * k, flat.long * scale * k, depth * k],
+      rotation: flat.angle,
+      name,
+      kind,
+    };
+  };
+  const boxes: PartBox[] = flats.map((flat) => place(flat, (flat.part.z * coreDepth) / 2, flat.depth * scale, flat.part.name, "part"));
+
+  for (const prop of scene.props) {
+    let flat: Flat;
+    if (prop.a && prop.b) {
+      flat = alongAxis(prop.a, prop.b, prop.w ?? 0.5, prop.d, 1, true);
+    } else if (prop.box) {
+      const [ymin, xmin, ymax, xmax] = prop.box;
+      const [left, top] = toFrame([ymin, xmin]);
+      const [right, bottom] = toFrame([ymax, xmax]);
+      const width = right - left;
+      const long = top - bottom;
+      flat = { cx: (left + right) / 2, cy: (top + bottom) / 2, width, long, depth: width * prop.d, angle: 0, halfX: width / 2, halfY: long / 2 };
+    } else {
+      continue;
+    }
+    // A prop over most of the frame is the background, and one far taller or wider than the subject is the room.
+    if ((flat.width * flat.long) / wide > 0.4) continue;
+    if (flat.halfY * 2 * scale > LAYOUT_SUBJECT_HEIGHT * 1.4 || flat.halfX * 2 * scale > LAYOUT_SUBJECT_HEIGHT * 2.6) continue;
+    const depth = Math.min(flat.depth * scale, LAYOUT_SUBJECT_HEIGHT * 1.5);
+    // A prop whose bottom is about level with the subject's feet stands on the floor: the camera ray through its
+    // bottom meets the floor at its front face. One held up (a guitar, a board) keeps the side the model gave it.
+    const bottom = worldY(flat.cy - flat.halfY);
+    const below = target[1] - bottom;
+    const reach = (target[1] - floorY) / Math.max(below, 1e-6);
+    const front = SHOT_DISTANCE * (1 - reach);
+    if (bottom < floorY + LAYOUT_SUBJECT_HEIGHT * 0.12 && below > 0.05 && Math.abs(front) <= LAYOUT_SUBJECT_HEIGHT) {
+      const k = (SHOT_DISTANCE - front) / SHOT_DISTANCE;
+      boxes.push(place(flat, front - (depth * k) / 2, depth, prop.name, "prop", front));
+    } else {
+      boxes.push(place(flat, (prop.z * (coreDepth + depth)) / 2, depth, prop.name, "prop"));
+    }
+  }
+
+  // Hang the frame behind everything. Seen from the starting camera, a point on the subject's plane (z = 0)
+  // and the same point on the frame line up when the frame is pushed back and scaled up around the camera's axis.
+  let back = 0;
+  for (const box of boxes) back = Math.max(back, -(box.center[2] - box.size[2] / 2));
+  const plateZ = -(back + 0.25);
+  const grow = (SHOT_DISTANCE - plateZ) / SHOT_DISTANCE;
+  const frameX = worldX(0);
+  const frameY = worldY(0);
+  const plate: PlatePlacement = {
+    center: [target[0] + (frameX - target[0]) * grow, target[1] + (frameY - target[1]) * grow, plateZ],
+    size: [wide * scale * grow, scale * grow],
+  };
+  return {
+    boxes,
+    floorY,
+    plate,
+    camera: { target, distance: SHOT_DISTANCE },
+    cropped: minY < -0.5 + 0.02,
+  };
 }
 
 /** The blocks as one triangle mesh, for views that draw a mesh instead of separate boxes. */
@@ -566,12 +675,12 @@ export function partBoxesMesh(parts: PartBoxes): { positions: Float32Array; indi
   ];
   for (const box of parts.boxes) {
     const base = positions.length / 3;
+    const cos = Math.cos(box.rotation ?? 0);
+    const sin = Math.sin(box.rotation ?? 0);
     for (const corner of corners) {
-      positions.push(
-        box.center[0] + (corner[0] * box.size[0]) / 2,
-        box.center[1] + (corner[1] * box.size[1]) / 2,
-        box.center[2] + (corner[2] * box.size[2]) / 2,
-      );
+      const x = (corner[0] * box.size[0]) / 2;
+      const y = (corner[1] * box.size[1]) / 2;
+      positions.push(box.center[0] + x * cos - y * sin, box.center[1] + x * sin + y * cos, box.center[2] + (corner[2] * box.size[2]) / 2);
     }
     for (const [a, b, c, d] of faces) indices.push(base + a!, base + b!, base + c!, base + a!, base + c!, base + d!);
   }
