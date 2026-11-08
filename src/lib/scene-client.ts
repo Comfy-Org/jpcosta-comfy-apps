@@ -1,8 +1,10 @@
-import { layoutSceneBlocks, partBoxesMesh, type PartBoxes } from "@/lib/scene-mesh";
-import { parseSubjectScene, selectTextOutput, SUBJECT_FRAME_CAP, type SceneBlock } from "@/lib/subject-pipeline";
+import { layoutFrameScene, partBoxesMesh, type PartBoxes } from "@/lib/scene-mesh";
+import { parseSubjectScene, selectTextOutput, SUBJECT_FRAME_CAP, type SubjectScene } from "@/lib/subject-pipeline";
 import { loadVideoElement, seekTo } from "@/lib/video-client";
 
 export const SCENE_SAMPLE_LONG_SIDE = 512;
+/** The frame shown behind the blocks is grabbed again at this size, so it stays sharp on a big screen. */
+export const SCENE_PLATE_LONG_SIDE = 1280;
 
 export type SceneModel = {
   /** The shot as named blocks, placed for the loading build. */
@@ -13,7 +15,11 @@ export type SceneModel = {
   sourceFaces: number;
   reducedFaces: number;
   time: number;
+  /** Index of the chosen frame in the sampled frames. */
+  frame: number;
   subject: string;
+  /** The chosen frame, shown behind the blocks. Added once it has been grabbed. */
+  plate?: Blob | null;
   /** Set only when the server returned the sample block figure. Not a model result. */
   mock?: boolean;
 };
@@ -25,7 +31,8 @@ type SubjectPayload = {
   frame?: number;
   subject?: string;
   time?: number;
-  blocks?: SceneBlock[];
+  /** Mock mode only: the sample reply, read exactly like a model's. */
+  reply?: string;
   error?: { code?: string; message?: string } | string;
 };
 
@@ -53,7 +60,7 @@ function jpegFrame(canvas: HTMLCanvasElement): Blob {
  * Sample up to 12 frames across the accepted clip. The model, not this
  * function, decides which frame is the subject.
  */
-export async function sampleSceneFrames(file: File, duration: number): Promise<{ frames: Blob[]; times: number[] }> {
+export async function sampleSceneFrames(file: File, duration: number): Promise<{ frames: Blob[]; times: number[]; aspect: number }> {
   if (!(duration > 0)) throw new Error("Could not read that video.");
   const url = URL.createObjectURL(file);
   try {
@@ -83,17 +90,49 @@ export async function sampleSceneFrames(file: File, duration: number): Promise<{
     video.pause();
     video.removeAttribute("src");
     video.load();
-    return { frames, times };
+    return { frames, times, aspect: video.videoWidth / video.videoHeight };
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
-function asModel(blocks: readonly SceneBlock[], subject: string, time: number, mock = false): SceneModel {
-  const parts = layoutSceneBlocks(blocks);
+/** One frame of the clip as a JPEG, for the backdrop behind the blocks. */
+export async function grabFrame(file: File, time: number, longSide = SCENE_PLATE_LONG_SIDE): Promise<Blob> {
+  const url = URL.createObjectURL(file);
+  try {
+    const video = await loadVideoElement(url);
+    if (!video.videoWidth || !video.videoHeight) throw new Error("Could not read that video.");
+    const scale = Math.min(1, longSide / Math.max(video.videoWidth, video.videoHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(8, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(8, Math.round(video.videoHeight * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Could not read that video.");
+    await seekTo(video, Math.max(0, time));
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    return jpegFrame(canvas);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function asModel(scene: SubjectScene, aspect: number, times: number[], mock = false): SceneModel {
+  const parts = layoutFrameScene(scene, aspect);
   const mesh = partBoxesMesh(parts);
   const faces = mesh.indices.length / 3;
-  return { parts, ...mesh, sourceFaces: faces, reducedFaces: faces, time, subject, mock };
+  return {
+    parts,
+    ...mesh,
+    sourceFaces: faces,
+    reducedFaces: faces,
+    time: times[scene.frame] ?? 0,
+    frame: scene.frame,
+    subject: scene.subject,
+    mock,
+  };
 }
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -148,29 +187,27 @@ async function postFrames(frames: Blob[], times: number[], onStatus?: (message: 
 }
 
 /**
- * One Gemini job looks at the frames, picks the subject and lays the shot out as named blocks.
+ * One Gemini job looks at the frames, picks the subject and marks its parts on the chosen frame.
  * No image-to-3D model runs, so the toy is ready in seconds, well before the video.
  * `onQueued` fires once the job is on the deployment, so the video job can queue behind it.
- * A mock server returns the sample figure on the first response and does not call Comfy.
+ * A mock server returns a sample reply on the first response and does not call Comfy.
  */
 export async function requestSubjectModel(
   frames: Blob[],
   times: number[],
+  aspect: number,
   onStatus?: (message: string) => void,
   onQueued?: () => void,
 ): Promise<SceneModel> {
-  onStatus?.("Sketching the shot as blocks…");
+  onStatus?.("Marking the subject on the frame…");
   const picked = await postFrames(frames, times, onStatus);
   onQueued?.();
-  if (picked.blocks) {
-    return asModel(picked.blocks, picked.subject || "The subject", picked.time ?? times[picked.frame ?? 0] ?? 0, picked.mock === true);
-  }
+  if (typeof picked.reply === "string") return asModel(parseSubjectScene(picked.reply, frames.length), aspect, times, picked.mock === true);
   if (!picked.jobId) throw new Error("Could not build a 3D blockout from that clip.");
   const job = await pollJob(picked.jobId);
   const textOutput = selectTextOutput(job.outputs ?? []);
-  if (!textOutput?.sig) throw new Error("The model did not lay out any blocks.");
+  if (!textOutput?.sig) throw new Error("The model did not mark any parts.");
   const textResponse = await fetch(`/api/outputs/${textOutput.id}?sig=${textOutput.sig}`);
-  if (!textResponse.ok) throw new Error("The model did not lay out any blocks.");
-  const scene = parseSubjectScene(await textResponse.text(), frames.length);
-  return asModel(scene.blocks, scene.subject, times[scene.frame] ?? 0);
+  if (!textResponse.ok) throw new Error("The model did not mark any parts.");
+  return asModel(parseSubjectScene(await textResponse.text(), frames.length), aspect, times);
 }

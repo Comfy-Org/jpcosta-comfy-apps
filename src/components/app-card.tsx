@@ -6,7 +6,7 @@ import { downloadBlob, exportCutout } from "@/lib/composite";
 import { FORM_BUDGET_BYTES, VIDEO_FORM_BUDGET_BYTES, imageRejectReason, packImages, randomSeed, shrinkForUpload, videoRejectReason, videoTypeRejectReason } from "@/lib/prepare-image";
 import { clientFailureMessage, fetchBlobRetrying, type ClientStep } from "@/lib/client-fetch";
 import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
-import { requestSubjectModel, sampleSceneFrames, type SceneModel } from "@/lib/scene-client";
+import { grabFrame, requestSubjectModel, sampleSceneFrames, type SceneModel } from "@/lib/scene-client";
 import { SCENE_POLYGON_DEFAULT } from "@/lib/scene-mesh";
 import { BlockBuild } from "@/components/block-build";
 import { LILAC, TERMINAL_STATUSES, type CatalogApp, type CatalogImage, type JobView, type RunResponse, type TextControl } from "@/lib/types";
@@ -276,6 +276,7 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
             const picked = await requestSubjectModel(
               sampled.frames,
               sampled.times,
+              sampled.aspect,
               (message) => {
                 if (token === sceneToken.current) setNeed(message);
               },
@@ -284,7 +285,10 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
               },
             );
             if (token !== sceneToken.current) return;
-            setScene(picked);
+            // The chosen frame hangs behind the blocks, grabbed again at full size so it stays sharp.
+            const plate = await grabFrame(prepared.file, picked.time).catch(() => sampled.frames[picked.frame] ?? null);
+            if (token !== sceneToken.current) return;
+            setScene({ ...picked, plate });
             setSceneState("ready");
             setNeed(
               prepared.trimmed
@@ -880,6 +884,7 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
             <div className="preview r3d-build" data-hud={parts ? "persp · drag to orbit · click a block" : "persp"}>
               <BlockBuild
                 parts={parts}
+                plate={scene?.plate ?? null}
                 done={Boolean(active) && !busy}
                 onFinished={() => {
                   if (active) setShownId(active.id);
