@@ -72,6 +72,7 @@ export function Studio({
   menu = null,
   brand = "Comfy API Apps",
   hero = true,
+  layout = "card",
 }: {
   apps: CatalogApp[];
   mock: boolean;
@@ -83,6 +84,8 @@ export function Studio({
   brand?: string;
   /** Show the big title above the card. */
   hero?: boolean;
+  /** "steps" turns supported apps into a guided step-by-step flow. */
+  layout?: "card" | "steps";
 }) {
   const count = apps.length;
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -389,7 +392,7 @@ export function Studio({
                   }}
                 >
                   <div className="stage-body" inert={itemIndex !== index}>
-                    <AppCard app={item} />
+                    <AppCard app={item} layout={layout} />
                   </div>
                 </div>
               ))}

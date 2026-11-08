@@ -317,16 +317,6 @@ function AxisGizmo() {
 }
 
 /** Fake viewport menu for the site header. Decoration only. */
-export function ViewportMenu() {
-  return (
-    <div className="vp-menu" aria-hidden="true">
-      {["View", "Shading", "Lighting", "Show", "Renderer", "Panels"].map((item) => (
-        <span key={item}>{item}</span>
-      ))}
-    </div>
-  );
-}
-
 /** Wraps a page so the whole UI reads as a 3D viewport that renders where the cursor goes. */
 export function ViewportShell({ children }: { children: ReactNode }) {
   return (

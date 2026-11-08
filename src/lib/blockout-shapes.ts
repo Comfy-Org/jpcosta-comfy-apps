@@ -7,9 +7,9 @@ export type Shape =
 const SLAB = ".card";
 const STRIP = ".site-header";
 const SCREEN = ".preview, .scene-dock";
-const WELL = ".seg, .slot, .track, .slider input[type='range']";
+const WELL = ".seg, .slot, .track, .r3d-steps, .slider input[type='range']";
 const DASHED = ".upload";
-const BLOCK = ".btn, button.run, .seg button.on, .icon, .pill, .chip, .mockpill, .big, .toast, .warn, .thumb, .brand-mark";
+const BLOCK = ".btn, button.run, .seg button.on, .icon, .pill, .chip, .mockpill, .big, .toast, .warn, .thumb, .brand-mark, .r3d-steps button.on, .r3d-split-handle i, .r3d-busy-card";
 const MEDIA = "video, img, canvas.scene-orbit";
 const ALL = [STRIP, SLAB, SCREEN, WELL, DASHED, BLOCK, MEDIA].join(", ");
 

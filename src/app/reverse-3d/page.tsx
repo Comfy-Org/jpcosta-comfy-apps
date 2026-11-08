@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Studio } from "@/components/studio";
-import { ViewportMenu, ViewportShell } from "@/components/viewport-shell";
+import { StepSlot } from "@/components/reverse-3d-steps";
+import { ViewportShell } from "@/components/viewport-shell";
 import { buildPublicCatalog } from "@/lib/catalog";
 import { apiKey, isMockMode, missingDedicatedKeyMessage } from "@/lib/env";
 import "./viewport.css";
@@ -22,9 +23,10 @@ export default function Reverse3dPage() {
         mock={mock}
         configured
         notice={mock || ready ? null : missingDedicatedKeyMessage("reverse-3d")}
-        menu={<ViewportMenu />}
+        menu={<StepSlot />}
         brand="Reverse 3D"
         hero={false}
+        layout="steps"
       />
     </ViewportShell>
   );

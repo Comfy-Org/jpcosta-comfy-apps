@@ -133,20 +133,52 @@
 }
 .vp .header-bar { gap: 32px; }
 .vp .brand-word { font-size: 15px; font-weight: 600; letter-spacing: -0.03em; }
-.vp-menu {
+/* Step indicator in the header: 1 Video · 2 Tweak · 3 Result. */
+.r3d-steps-slot { display: flex; justify-content: center; flex: 1; min-width: 0; }
+.r3d-steps {
   display: flex;
   gap: 4px;
-  margin-right: auto;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--vp-well);
+  box-shadow: inset 0 1px 2px var(--vp-well-shade);
+}
+.r3d-steps button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 12px 0 6px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--vp-mute);
+  font: inherit;
   font-size: 13px;
   font-weight: 500;
-  color: var(--vp-mute);
-}
-.vp-menu span {
   white-space: nowrap;
-  padding: 4px 10px;
-  border-radius: 8px;
+  cursor: pointer;
 }
-.vp-menu span:first-child { color: var(--vp-ink); background: rgba(33, 25, 39, 0.05); }
+.r3d-steps button:disabled { cursor: default; }
+.r3d-steps button b {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: rgba(33, 25, 39, 0.07);
+  font-size: 11px;
+  font-weight: 600;
+}
+.r3d-steps button.done { color: var(--vp-ink2); }
+.r3d-steps button.done:not(:disabled):hover { background: rgba(255, 255, 255, 0.7); }
+.r3d-steps button.done b { background: #fff; box-shadow: 0 0 0 1px var(--vp-ring); }
+.r3d-steps button.on {
+  color: var(--vp-ink);
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--vp-ring), 0 1px 0 #dcd6cc, 0 2px 0 #dcd6cc, 0 6px 10px -6px rgba(28, 20, 36, 0.35);
+}
+.r3d-steps button.on b { background: var(--vp-ink); color: #fff; }
 .vp .mockpill {
   box-shadow: 0 2px 0 #c9d63a, 0 6px 12px -6px rgba(28, 20, 36, 0.3);
 }
@@ -418,6 +450,179 @@
 
 .vp :focus-visible { outline: 2px solid var(--vp-ink); outline-offset: 3px; }
 
+/* ---------- Steps layout ---------- */
+
+.vp .card.r3d { padding: 18px; }
+.r3d-one,
+.r3d-two,
+.r3d-three { flex: 1; min-height: 0; display: flex; animation: r3d-in 360ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes r3d-in {
+  from { opacity: 0; translate: 0 8px; }
+}
+
+/* Step 1: one big drop zone. */
+.r3d-one { flex-direction: column; align-items: center; gap: 12px; }
+.vp .upload.r3d-drop {
+  flex: 1;
+  width: 100%;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px 20px;
+  border-radius: 18px;
+  text-align: center;
+}
+.vp .r3d-drop .big { width: 56px; height: 56px; border-radius: 16px; margin-bottom: 8px; }
+.r3d-drop-title {
+  margin: 0;
+  font-size: clamp(22px, 2.4vw, 30px);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.1;
+  color: var(--vp-ink);
+}
+.r3d-drop-sub { margin: 0 0 10px; font-size: 14px; color: var(--vp-mute); }
+.vp .r3d-drop .btn { height: 42px; padding: 0 18px; font-size: 14px; border-radius: 12px; }
+.vp .r3d-keep { height: 36px; padding: 0 14px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Step 2: a big 3D view with one control beside it. */
+.r3d-two { gap: 18px; }
+.vp .r3d-view { flex: 1; margin-top: 0; min-height: 320px; }
+.vp .r3d-view::before { content: attr(data-hud) / ""; }
+.r3d-side {
+  width: 280px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 4px;
+}
+.r3d-side h2 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.035em; color: var(--vp-ink); }
+.r3d-side p { margin: 0 0 10px; font-size: 14px; line-height: 1.45; color: var(--vp-mute); }
+.r3d-ends { display: flex; justify-content: space-between; margin-top: 2px; font-size: 12px; font-weight: 500; color: var(--vp-mute); }
+.r3d-amount { margin-bottom: 12px; }
+.vp .r3d-side .slider input[type="range"]:disabled { opacity: 0.5; }
+.r3d-side .need { margin-bottom: 2px; }
+.r3d-wait { color: var(--vp-mute); }
+.vp .r3d-side button.run { margin: 0; }
+.vp .r3d-side .btn { height: 44px; }
+
+/* Step 3: the comparison fills the card. */
+.r3d-three { flex-direction: column; gap: 14px; }
+.vp .r3d-split,
+.vp .r3d-busy { flex: 1; margin-top: 0; min-height: 300px; cursor: ew-resize; touch-action: pan-y; }
+.vp .r3d-busy { cursor: progress; }
+.vp .r3d-split::before,
+.vp .r3d-split::after { content: none; }
+.r3d-split-media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+.r3d-split-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+  pointer-events: none;
+}
+.r3d-split-handle i {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--vp-ink);
+  font-style: normal;
+  font-size: 15px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+.r3d-tag {
+  position: absolute;
+  bottom: 12px;
+  z-index: 2;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(20, 16, 24, 0.5);
+  color: #fff;
+  font-family: var(--vp-mono);
+  font-size: 11px;
+  pointer-events: none;
+}
+.r3d-tag.l { left: 12px; }
+.r3d-tag.r { right: 12px; }
+.r3d-busy .shot { filter: grayscale(1) contrast(0.8) brightness(0.9); opacity: 0.6; }
+.r3d-busy-card {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  translate: -50% -50%;
+  width: min(300px, 80%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.45);
+  font-size: 14px;
+  color: var(--vp-ink);
+}
+.r3d-busy-card .track { display: block; position: relative; overflow: hidden; border-radius: 999px; }
+.r3d-busy-card .track i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; transition: width 300ms ease; }
+.r3d-row { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.vp .r3d-row .btn { height: 40px; padding: 0 16px; font-size: 14px; }
+.vp .btn.ghost { --face: transparent; --side: transparent; box-shadow: none; animation: none; color: var(--vp-ink2); padding-left: 6px; }
+.vp .btn.ghost:not(:disabled):hover { box-shadow: none; translate: none; background: rgba(33, 25, 39, 0.05); }
+.vp .r3d-toast { position: static; margin-left: auto; padding: 6px 12px; font-size: 13px; white-space: nowrap; }
+.r3d-dl { position: relative; margin-left: auto; }
+.r3d-toast + .r3d-dl { margin-left: 0; }
+.r3d-caret { margin-left: 2px; font-size: 11px; opacity: 0.7; }
+.r3d-dl-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 5;
+  width: 250px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--vp-ring), 0 22px 44px -18px rgba(28, 20, 36, 0.45);
+}
+.vp .r3d-dl-menu .btn {
+  height: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  text-align: left;
+  animation: none;
+}
+.r3d-dl-menu .btn b { font-size: 14px; font-weight: 600; }
+.r3d-dl-menu .btn span { font-size: 12px; color: var(--vp-mute); font-weight: 400; }
+.r3d-hidden-input { display: none; }
+
 /* ---------- Motion ---------- */
 
 @keyframes vp-bob {
@@ -437,7 +642,10 @@
   .vp button.run,
   .vp .nav-arrow,
   .vp .big,
-  .vp .pill.run i { animation: none; }
+  .vp .pill.run i,
+  .r3d-one,
+  .r3d-two,
+  .r3d-three { animation: none; }
   .vp .btn,
   .vp button.run { transition: none; }
 }
@@ -448,11 +656,20 @@
   .vp-hud { display: none; }
 }
 @media (max-width: 980px) {
-  .vp-menu { display: none; }
   .vp .card { border-radius: 18px; }
   .vp .stage-wrap { margin-top: 14px; }
 }
+@media (max-width: 980px) {
+  .r3d-two { flex-direction: column; }
+  .r3d-side { width: auto; padding: 0; }
+  .vp .r3d-view { min-height: 300px; }
+  .vp .upload.r3d-drop { min-height: 380px; }
+}
 @media (max-width: 640px) {
+  .r3d-steps button { padding: 0 8px 0 5px; gap: 5px; font-size: 12px; }
+  .r3d-steps button:not(.on) span { display: none; }
+  .r3d-steps button:not(.on) { padding-right: 5px; }
   .vp .preview::before { content: "persp" / ""; }
+  .vp .r3d-split::before { content: none; }
   .vp .preview::after { content: none; }
 }
