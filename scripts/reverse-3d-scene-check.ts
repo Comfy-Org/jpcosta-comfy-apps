@@ -6,36 +6,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { POST } from "../src/app/api/run/[app]/route";
+import { POST as postSubject } from "../src/app/api/reverse-3d/subject/route";
 import { getApp } from "../src/lib/config";
-import {
-  buildSceneMesh,
-  orbitFromDrag,
-  pickBestSubjectIndex,
-  projectPoint,
-  readSubject,
-  SCENE_CLAY,
-  SCENE_DEFAULT_PITCH,
-  SCENE_DEFAULT_YAW,
-  sceneMvp,
-} from "../src/lib/scene-mesh";
+import { blockFigureMesh, decodeGlb, encodeGlb, reduceMesh } from "../src/lib/mesh-reduce";
+import { buildBoxMesh, orbitFromDrag, projectPoint, SCENE_CLAY, SCENE_DEFAULT_PITCH, SCENE_DEFAULT_YAW, sceneMvp } from "../src/lib/scene-mesh";
+import { buildMeshWorkflow, buildPickWorkflow, parseSubjectChoice, MESH_KEEP_FRACTION } from "../src/lib/subject-pipeline";
 import { durationOverCap, readContainerDurationSeconds } from "../src/lib/video-duration";
 import { acceptedClipDuration, REVERSE_3D_MAX_SECONDS } from "../src/lib/video-client";
 import { buildJobBody } from "../src/lib/workflow";
-
-function paint(width: number, height: number, fill: (x: number, y: number) => [number, number, number]): Uint8ClampedArray {
-  const pixels = new Uint8ClampedArray(width * height * 4);
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const [r, g, b] = fill(x, y);
-      const offset = (y * width + x) * 4;
-      pixels[offset] = r;
-      pixels[offset + 1] = g;
-      pixels[offset + 2] = b;
-      pixels[offset + 3] = 255;
-    }
-  }
-  return pixels;
-}
 
 function box(type: string, payload: Buffer): Buffer {
   const out = Buffer.alloc(8 + payload.length);
@@ -137,37 +115,38 @@ async function main() {
   assert.equal(acceptedClipDuration(10.06).trimmed, true);
   assert.throws(() => acceptedClipDuration(2.9), /at least 3/);
 
-  const flat = paint(60, 34, () => [240, 240, 240]);
-  const subject = paint(48, 27, (x, y) => (x > 14 && x < 34 && y > 6 && y < 20 ? [220, 40, 40] : [230, 230, 235]));
-  const crowd = paint(60, 36, (x, y) => {
-    const col = Math.floor(x / 20);
-    const row = Math.floor(y / 18);
-    const localX = x % 20;
-    const localY = y % 18;
-    const on = localX > 4 && localX < 15 && localY > 3 && localY < 14;
-    return on ? [40 + col * 40, 30 + row * 50, 200] : [232, 232, 232];
-  });
-  const product = paint(48, 27, (x, y) => (x > 1 && x < 46 && y > 1 && y < 25 ? [20, 20, 20] : [240, 240, 240]));
-  const pair = paint(60, 40, (x, y) => {
-    if (x >= 8 && x <= 27 && y >= 4 && y <= 35) return [240, 240, 240];
-    if (x >= 42 && x <= 52 && y >= 10 && y <= 22) return [220, 40, 40];
-    return [70, 70, 74];
-  });
-  const subjectRead = readSubject(subject, 48, 27);
-  const crowdRead = readSubject(crowd, 60, 36);
-  const productRead = readSubject(product, 48, 27);
-  const pairRead = readSubject(pair, 60, 40);
-  const emptyRead = readSubject(flat, 60, 34);
-  assert.ok(subjectRead.clear, JSON.stringify(subjectRead));
-  assert.equal(subjectRead.rivals, 1);
-  assert.ok(subjectRead.score > crowdRead.score, JSON.stringify({ subject: subjectRead.score, crowd: crowdRead.score }));
-  assert.ok(crowdRead.rivals >= 4, `crowd rivals ${crowdRead.rivals}`);
-  assert.ok(subjectRead.score > productRead.score, JSON.stringify({ subject: subjectRead.score, product: productRead.score }));
-  assert.equal(emptyRead.score, 0);
-  assert.equal(pickBestSubjectIndex([subjectRead.score, crowdRead.score, subjectRead.score]), 0);
-  assert.equal(pickBestSubjectIndex([1, 4, 4, 2]), 1);
+  const pick = buildPickWorkflow(12);
+  assert.equal(pick["20"]?.class_type, "GeminiNodeV3");
+  assert.equal(pick["21"]?.class_type, "SaveText");
+  assert.equal(Object.keys(pick).filter((id) => pick[id]?.class_type === "LoadImage").length, 12);
+  for (let index = 1; index <= 12; index += 1) {
+    assert.deepEqual(pick["20"]?.inputs[`model.images.image_${index}`], [String(index), 0]);
+  }
+  assert.match(String(pick["20"]?.inputs["model.prompt"]), /main subject/);
+  assert.equal(parseSubjectChoice("frame: 4\nsubject: the armored figure", 12).frame, 3);
+  assert.equal(parseSubjectChoice("frame: 4\nsubject: the armored figure", 12).subject, "the armored figure");
+  assert.throws(() => parseSubjectChoice("a person in the middle", 12), /choose a frame/);
+  assert.throws(() => parseSubjectChoice("frame: 13\nsubject: someone", 12), /not sampled/);
 
-  const steps = [64, 256, 768, 2048, 4096].map((target) => buildSceneMesh(subject, 48, 27, target));
+  const meshGraph = buildMeshWorkflow();
+  assert.equal(meshGraph["2"]?.class_type, "LoadBackgroundRemovalModel");
+  assert.equal(meshGraph["2"]?.inputs.bg_removal_name, "birefnet.safetensors");
+  assert.equal(meshGraph["3"]?.class_type, "RemoveBackground");
+  assert.deepEqual(meshGraph["3"]?.inputs.image, ["1", 0]);
+  assert.equal(meshGraph["5"]?.class_type, "JoinImageWithAlpha");
+  assert.equal(meshGraph["21"]?.class_type, "TencentImageToModelNode");
+  assert.equal(meshGraph["21"]?.inputs.generate_type, "Geometry");
+  assert.deepEqual(meshGraph["21"]?.inputs.image, ["5", 0]);
+
+  const source = blockFigureMesh();
+  const reduced = reduceMesh(source);
+  const ratio = reduced.reducedFaces / reduced.sourceFaces;
+  assert.ok(Math.abs(ratio - MESH_KEEP_FRACTION) < 0.12, `kept ${ratio} of ${reduced.sourceFaces} faces`);
+  assert.ok(reduced.reducedFaces < reduced.sourceFaces);
+  const roundTrip = decodeGlb(encodeGlb(reduced));
+  assert.equal(roundTrip.indices.length, reduced.indices.length);
+
+  const steps = [64, 256, 768, 2048, 4096].map((target) => buildBoxMesh(reduced.positions, reduced.indices, target));
   for (let index = 1; index < steps.length; index += 1) {
     assert.ok(steps[index].boxesLong >= steps[index - 1].boxesLong);
     assert.ok(steps[index].polygonCount >= steps[index - 1].polygonCount);
@@ -176,7 +155,7 @@ async function main() {
   const high = steps[steps.length - 1];
   assert.ok(high.boxesLong > low.boxesLong, `boxes ${low.boxesLong} → ${high.boxesLong}`);
   assert.ok(high.polygonCount > low.polygonCount);
-  assert.ok(high.boxesLong <= Math.ceil(19 * 0.32), `finest boxes ${high.boxesLong} are denser than 30% of the subject`);
+  assert.ok(high.boxesLong <= 24, `finest boxes ${high.boxesLong} are not chunky`);
   assert.ok(low.boxesLong <= Math.ceil(high.boxesLong * 0.55));
   let minX = Infinity;
   let maxX = -Infinity;
@@ -215,26 +194,6 @@ async function main() {
   assert.ok(minZ < -0.05 && maxZ > 0.05, `volume z ${minZ}..${maxZ}`);
   assert.ok(frontNormal > 0 && backNormal < 0, `normals front ${frontNormal} back ${backNormal}`);
   assert.ok(Math.abs(low.floorY - minY) < 1e-4);
-
-  const pairMesh = buildSceneMesh(pair, 60, 40, 768);
-  let pairMinX = Infinity;
-  let pairMaxX = -Infinity;
-  let pairMinY = Infinity;
-  let pairMaxY = -Infinity;
-  const pairSeen = new Uint8Array(pairMesh.positions.length / 3);
-  for (const index of pairMesh.indices) pairSeen[index] = 1;
-  for (let index = 0; index < pairSeen.length; index += 1) {
-    if (!pairSeen[index]) continue;
-    const x = pairMesh.positions[index * 3] ?? 0;
-    const y = pairMesh.positions[index * 3 + 1] ?? 0;
-    pairMinX = Math.min(pairMinX, x);
-    pairMaxX = Math.max(pairMaxX, x);
-    pairMinY = Math.min(pairMinY, y);
-    pairMaxY = Math.max(pairMaxY, y);
-  }
-  const pairAspect = (pairMaxX - pairMinX) / Math.max(0.001, pairMaxY - pairMinY);
-  assert.ok(pairAspect < 0.95, `kept both shapes, aspect ${pairAspect}`);
-  assert.ok(pairRead.rivals >= 2);
 
   let bulge = 0;
   let bulgeX = 0;
@@ -317,6 +276,29 @@ async function main() {
   assert.deepEqual(workflow["20"]?.inputs["model.reference_images.image_1"], ["12", 0]);
   assert.match(String(workflow["20"]?.inputs["model.prompt"]), /@Image1/);
   assert.deepEqual(workflow["20"]?.inputs["model.video_1"], ["16", 0]);
+
+  const subjectForm = new FormData();
+  subjectForm.set("step", "pick");
+  subjectForm.set("times", "0.4,1.2");
+  subjectForm.append("frame", new File([new Uint8Array(png)], "frame_1.jpg", { type: "image/jpeg" }));
+  subjectForm.append("frame", new File([new Uint8Array(png)], "frame_2.jpg", { type: "image/jpeg" }));
+  const subjectResponse = await postSubject(new Request("http://localhost/api/reverse-3d/subject", { method: "POST", body: subjectForm }));
+  const subjectBody = (await subjectResponse.json()) as {
+    subject?: string;
+    sourceFaces?: number;
+    reducedFaces?: number;
+    positions?: number[];
+    pick?: Record<string, { class_type?: string }>;
+    mesh?: Record<string, { class_type?: string; inputs?: Record<string, unknown> }>;
+    error?: { message?: string };
+  };
+  assert.equal(subjectResponse.status, 200, JSON.stringify(subjectBody.error));
+  assert.equal(subjectBody.subject, "The main subject");
+  assert.equal(subjectBody.pick?.["20"]?.class_type, "GeminiNodeV3");
+  assert.equal(subjectBody.mesh?.["2"]?.class_type, "LoadBackgroundRemovalModel");
+  assert.equal(subjectBody.mesh?.["21"]?.class_type, "TencentImageToModelNode");
+  assert.ok((subjectBody.reducedFaces ?? 0) < (subjectBody.sourceFaces ?? 0));
+  assert.ok((subjectBody.positions?.length ?? 0) > 9);
 
   const app = getApp("reverse-3d");
   assert.ok(app);

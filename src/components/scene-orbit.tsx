@@ -2,7 +2,7 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import {
-  buildSceneMesh,
+  buildBoxMesh,
   mat3FromMat4,
   orbitFromDrag,
   SCENE_DEFAULT_PITCH,
@@ -18,9 +18,8 @@ export type SceneOrbitHandle = {
 };
 
 type Props = {
-  pixels: Uint8ClampedArray;
-  width: number;
-  height: number;
+  positions: Float32Array;
+  indices: Uint32Array;
   polygons: number;
   onPolygonCount?: (count: number) => void;
 };
@@ -188,7 +187,7 @@ function fitCanvas(canvas: HTMLCanvasElement) {
 }
 
 export const SceneOrbit = forwardRef<SceneOrbitHandle, Props>(function SceneOrbit(
-  { pixels, width, height, polygons, onPolygonCount },
+  { positions, indices, polygons, onPolygonCount },
   ref,
 ) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -297,7 +296,7 @@ export const SceneOrbit = forwardRef<SceneOrbitHandle, Props>(function SceneOrbi
   }, []);
 
   useEffect(() => {
-    const mesh = buildSceneMesh(pixels, width, height, polygons);
+    const mesh = buildBoxMesh(positions, indices, polygons);
     meshRef.current = mesh;
     indexCount.current = mesh.indices.length;
     floorRef.current = floorPositions(mesh.floorY);
@@ -310,7 +309,7 @@ export const SceneOrbit = forwardRef<SceneOrbitHandle, Props>(function SceneOrbi
     if (gls) uploadMesh(gls, mesh);
     onCountRef.current?.(mesh.polygonCount);
     drawRef.current();
-  }, [pixels, width, height, polygons]);
+  }, [positions, indices, polygons]);
 
   return (
     <canvas

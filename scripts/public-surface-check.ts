@@ -26,6 +26,9 @@ assert.equal(decidePublicRequest("POST", "/reverse-3d").action, "deny");
 assert.equal(decidePublicRequest("GET", "/sprite-generator").action, "deny");
 assert.equal(decidePublicRequest("POST", "/api/run/reverse-3d").action, "allow");
 assert.equal(decidePublicRequest("GET", "/api/run/reverse-3d").action, "deny");
+assert.equal(decidePublicRequest("POST", "/api/reverse-3d/subject").action, "allow");
+assert.equal(decidePublicRequest("GET", "/api/reverse-3d/subject").action, "allow");
+assert.equal(decidePublicRequest("PUT", "/api/reverse-3d/subject").action, "deny");
 for (const id of listAppIds()) {
   if (isPublicApp(id)) continue;
   assert.equal(decidePublicRequest("POST", `/api/run/${id}`).action, "deny", id);

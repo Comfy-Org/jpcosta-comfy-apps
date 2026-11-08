@@ -65,6 +65,11 @@ export function decidePublicRequest(method: string, pathname: string): PublicDec
     return { action: "deny", message: "Unknown app." };
   }
 
+  if (path === "/api/reverse-3d/subject") {
+    if (method === "POST" || read) return { action: "allow" };
+    return { action: "deny", message: "Not found." };
+  }
+
   if (path.startsWith("/api/jobs/")) {
     const id = path.slice("/api/jobs/".length);
     if (read && isPublicJobId(id)) return { action: "allow" };

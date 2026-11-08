@@ -6,7 +6,7 @@ import { downloadBlob, exportCutout } from "@/lib/composite";
 import { FORM_BUDGET_BYTES, VIDEO_FORM_BUDGET_BYTES, imageRejectReason, packImages, randomSeed, shrinkForUpload, videoRejectReason, videoTypeRejectReason } from "@/lib/prepare-image";
 import { clientFailureMessage, fetchBlobRetrying, type ClientStep } from "@/lib/client-fetch";
 import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
-import { pickSceneFrame, type ScenePick } from "@/lib/scene-client";
+import { requestSubjectModel, sampleSceneFrames, type SceneModel } from "@/lib/scene-client";
 import { SCENE_POLYGON_DEFAULT } from "@/lib/scene-mesh";
 import { LILAC, TERMINAL_STATUSES, type CatalogApp, type CatalogImage, type JobView, type RunResponse, type TextControl } from "@/lib/types";
 import { AppIcon } from "@/components/app-icon";
@@ -101,7 +101,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
   const [findingScene, setFindingScene] = useState(false);
   const [waited, setWaited] = useState(0);
   const [recovery, setRecovery] = useState<Recovery | null>(null);
-  const [scene, setScene] = useState<ScenePick | null>(null);
+  const [scene, setScene] = useState<SceneModel | null>(null);
   const [sceneState, setSceneState] = useState<"idle" | "building" | "ready" | "error">("idle");
   const [polygonCount, setPolygonCount] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -253,8 +253,10 @@ export function AppCard({ app }: { app: CatalogApp }) {
                 },
               };
             });
-            setNeed("Picking the subject…");
-            const picked = await pickSceneFrame(prepared.file, prepared.duration);
+            setNeed("Asking which frame shows the subject…");
+            const sampled = await sampleSceneFrames(prepared.file, prepared.duration);
+            if (token !== sceneToken.current) return;
+            const picked = await requestSubjectModel(sampled.frames, sampled.times);
             if (token !== sceneToken.current) return;
             setScene(picked);
             setSceneState("ready");
@@ -734,9 +736,8 @@ export function AppCard({ app }: { app: CatalogApp }) {
     app.kind === "reverse-3d" && scene ? (
       <SceneOrbit
         ref={sceneOrbitRef}
-        pixels={scene.pixels}
-        width={scene.width}
-        height={scene.height}
+        positions={scene.positions}
+        indices={scene.indices}
         polygons={polygonValue}
         onPolygonCount={setPolygonCount}
       />
@@ -888,11 +889,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
               ) : null}
               {control.type === "slider" && control.key === "polygons" && scene ? (
                 <p className="field-note">
-                  Subject at {scene.time.toFixed(1)}s.
-                  {scene.clear
-                    ? " The background is left out."
-                    : " No single subject stood out, so this is the closest shape."}
-                  {scene.rivals > 1 ? " Other separate shapes were left out." : ""} Drag left for bigger boxes. Changes stay in the browser.
+                  {scene.subject} at {scene.time.toFixed(1)}s. Drag left for bigger boxes. Changes stay in the browser.
                 </p>
               ) : null}
               {control.type === "text" ? (
