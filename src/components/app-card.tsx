@@ -7,10 +7,12 @@ import { FORM_BUDGET_BYTES, VIDEO_FORM_BUDGET_BYTES, imageRejectReason, packImag
 import { clientFailureMessage, fetchBlobRetrying, type ClientStep } from "@/lib/client-fetch";
 import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
 import { requestSubjectModel, sampleSceneFrames, type SceneModel } from "@/lib/scene-client";
-import { SCENE_POLYGON_DEFAULT } from "@/lib/scene-mesh";
+import { buildBoxCells, SCENE_POLYGON_DEFAULT } from "@/lib/scene-mesh";
+import { BlockBuild } from "@/components/block-build";
 import { LILAC, TERMINAL_STATUSES, type CatalogApp, type CatalogImage, type JobView, type RunResponse, type TextControl } from "@/lib/types";
 import { AppIcon } from "@/components/app-icon";
 import { SceneOrbit, type SceneOrbitHandle } from "@/components/scene-orbit";
+import { DownloadMenu, DropZone, PickButton, StepNav, VideoSplit, type Step } from "@/components/reverse-3d-steps";
 
 type SceneCandidate = {
   token: string;
@@ -74,7 +76,7 @@ function controlValue(values: Record<string, string>, key: string): string {
   return values[key] ?? "";
 }
 
-export function AppCard({ app }: { app: CatalogApp }) {
+export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "card" | "steps" }) {
   const defaults = useMemo(() => {
     const next: Record<string, string> = {};
     for (const control of app.controls) next[control.key] = String(control.default);
@@ -104,6 +106,12 @@ export function AppCard({ app }: { app: CatalogApp }) {
   const [scene, setScene] = useState<SceneModel | null>(null);
   const [sceneState, setSceneState] = useState<"idle" | "building" | "ready" | "error">("idle");
   const [polygonCount, setPolygonCount] = useState(0);
+  /** Steps layout: a step the person went back to, over the one the state implies. */
+  const [pick, setPick] = useState<Step | null>(null);
+  /** Steps layout: the result the build animation has finished for, so the result step can open. */
+  const [shownId, setShownId] = useState<string | null>(null);
+  /** Steps layout: start the job on its own once the 3D subject is ready. */
+  const autoRun = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const sceneToken = useRef(0);
   const sceneOrbitRef = useRef<SceneOrbitHandle | null>(null);
@@ -745,6 +753,23 @@ export function AppCard({ app }: { app: CatalogApp }) {
       />
     ) : null;
 
+  const cells = useMemo(() => {
+    if (!scene) return null;
+    try {
+      return buildBoxCells(scene.positions, scene.indices, SCENE_POLYGON_DEFAULT);
+    } catch {
+      return null;
+    }
+  }, [scene]);
+
+  useEffect(() => {
+    if (layout !== "steps" || !autoRun.current || sceneState !== "ready" || !scene || busy) return;
+    autoRun.current = false;
+    void run();
+    // run reads the latest uploads and scene from this render; it should fire once when the subject is ready.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout, sceneState, scene]);
+
   const selectedScene = selectedToken ? `/api/paparazzi/scene?token=${encodeURIComponent(selectedToken)}` : "";
   const status = findingScene
     ? "Searching for a paparazzi photo"
@@ -768,6 +793,143 @@ export function AppCard({ app }: { app: CatalogApp }) {
       ? `${active.width} × ${active.height} · ${active.label}`
       : active.label
     : "";
+
+  if (layout === "steps" && app.kind === "reverse-3d") {
+    const video = uploads.video;
+    const building = sceneState === "building";
+    const loaderDone = Boolean(active && shownId === active.id);
+    const reached: Step = active ? 3 : video || building ? 2 : 1;
+    const implied: Step = active ? (loaderDone ? 3 : 2) : video || building ? 2 : 1;
+    const step: Step = busy ? 2 : (pick ?? implied);
+    const replay = step === 2 && loaderDone && !busy;
+    const failed = phase === "error" && Boolean(error);
+    const takeVideo = (file: File) => {
+      setPick(null);
+      setActiveId(null);
+      setPhase("idle");
+      setError(null);
+      setRecovery(null);
+      autoRun.current = true;
+      void takeFiles("video", [file]);
+    };
+    const saveCompare = () => {
+      if (!active?.compareBlob) return;
+      const ext = active.compareBlob.type.includes("mp4") ? "mp4" : "webm";
+      const filename = `${app.id}-side-by-side.${ext}`;
+      downloadBlob(active.compareBlob, filename);
+      setToast(filename);
+    };
+    const headline = failed
+      ? "That did not work"
+      : sceneState === "error"
+        ? "Could not read that shot"
+        : building
+          ? need || "Reading the shot…"
+          : phase === "queued"
+            ? "Queued…"
+            : phase === "running"
+              ? `Un-rendering · ${Math.round(progress * 100)}%`
+              : active
+                ? "Done!"
+                : "Getting ready…";
+    const detail = failed ? error : sceneState === "error" ? need : !building && need ? need : null;
+    const loaderBar = building ? 0.04 : active ? 1 : bar;
+    return (
+      <article className="card r3d" data-step={step}>
+        <StepNav
+          step={step}
+          reached={busy ? 2 : reached}
+          onPick={(next) => {
+            if (busy) return;
+            setPick(next === implied ? null : next);
+          }}
+        />
+        {scene ? (
+          <div className="r3d-capture" aria-hidden="true" style={{ aspectRatio: video && video.height ? `${video.width} / ${video.height}` : "16 / 9" }}>
+            {sceneView}
+          </div>
+        ) : null}
+        {step === 1 ? (
+          <div className="r3d-one">
+            <DropZone
+              title="Which shot should we un‑render?"
+              sub={`MP4, MOV or WebM · 3 to ${REVERSE_3D_MAX_SECONDS} s`}
+              hot={hot === "video"}
+              onHot={(on) => setHot(on ? "video" : null)}
+              onFile={takeVideo}
+            />
+            <div className="need" role="status">{sceneState === "error" || failed ? null : need}</div>
+            {video ? (
+              <button type="button" className="btn r3d-keep" onClick={() => setPick(null)}>
+                Back to {video.name} <span className="arrow" aria-hidden="true">→</span>
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {step === 2 ? (
+          <div className="r3d-two">
+            <div className="preview r3d-build" data-hud={cells ? "persp · drag to orbit · click a block" : "persp"}>
+              <BlockBuild
+                cells={cells}
+                progress={busy ? progress : active ? 1 : 0}
+                done={Boolean(active) && !busy}
+                onFinished={() => {
+                  if (active) setShownId(active.id);
+                  setPick(null);
+                }}
+              />
+              <div className={`r3d-status${failed || sceneState === "error" ? " bad" : ""}`} aria-live="polite">
+                <b>{replay ? "Built again, just for fun" : headline}</b>
+                {detail ? <p>{detail}</p> : null}
+                {failed || sceneState === "error" ? (
+                  <div className="r3d-status-actions">
+                    {failed ? (
+                      <button type="button" className="btn dark" onClick={() => void (recovery ? resume() : run())}>
+                        {recovery?.kind === "download" ? "Retry download" : recovery ? "Check job" : "Try again"}
+                      </button>
+                    ) : null}
+                    <PickButton className="btn" onFile={takeVideo}>
+                      Another video
+                    </PickButton>
+                  </div>
+                ) : (
+                  <span className="track" aria-hidden="true">
+                    <i style={{ width: `${Math.round(loaderBar * 100)}%` }} />
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {step === 3 && active ? (
+          <div className="r3d-three">
+            <VideoSplit
+              original={active.before.video || video?.url || active.url}
+              playblast={active.url}
+              position={compare}
+              onChange={setCompare}
+            />
+            <div className="r3d-row">
+              <PickButton className="btn ghost" onFile={takeVideo}>
+                <span className="arrow" aria-hidden="true">↺</span> Another video
+              </PickButton>
+              {toast ? (
+                <span className="toast r3d-toast">
+                  ✓ Saved <b>{toast}</b>
+                </span>
+              ) : null}
+              <DownloadMenu
+                compareReady={Boolean(active.compareBlob)}
+                compareNote={active.compareBlob ? "Final and playblast together" : active.compareError ? "Could not build it" : "Getting it ready…"}
+                onPlayblast={() => void onDownload()}
+                onCompare={saveCompare}
+              />
+            </div>
+          </div>
+        ) : null}
+      </article>
+    );
+  }
 
   return (
     <article className="card">
