@@ -7,7 +7,7 @@ import { FORM_BUDGET_BYTES, VIDEO_FORM_BUDGET_BYTES, imageRejectReason, packImag
 import { clientFailureMessage, fetchBlobRetrying, type ClientStep } from "@/lib/client-fetch";
 import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
 import { requestSubjectModel, sampleSceneFrames, type SceneModel } from "@/lib/scene-client";
-import { buildBoxCells, SCENE_POLYGON_DEFAULT } from "@/lib/scene-mesh";
+import { buildPartBoxes, SCENE_POLYGON_DEFAULT } from "@/lib/scene-mesh";
 import { BlockBuild } from "@/components/block-build";
 import { LILAC, TERMINAL_STATUSES, type CatalogApp, type CatalogImage, type JobView, type RunResponse, type TextControl } from "@/lib/types";
 import { AppIcon } from "@/components/app-icon";
@@ -374,10 +374,6 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
         return "Upload an image first.";
       }
     }
-    if (app.kind === "reverse-3d") {
-      if (sceneState === "building") return "Building the 3D subject…";
-      if (sceneState !== "ready" || !scene) return "Could not build a 3D subject from that clip.";
-    }
     return null;
   }
 
@@ -606,21 +602,7 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
       return;
     }
     const budget = app.images.some((image) => image.accept === "video") ? VIDEO_FORM_BUDGET_BYTES : FORM_BUDGET_BYTES;
-    let sceneFile: File | null = null;
-    if (app.kind === "reverse-3d") {
-      try {
-        const blob = await sceneOrbitRef.current?.capture();
-        if (!blob) {
-          setNeed("The 3D scene is not ready yet.");
-          return;
-        }
-        sceneFile = new File([blob], "scene.png", { type: "image/png" });
-      } catch (err) {
-        setNeed(err instanceof Error ? err.message : "Could not read the 3D scene.");
-        return;
-      }
-    }
-    if (formBytes() + (sceneFile?.size ?? 0) > budget) {
+    if (formBytes() > budget) {
       setNeed("These files are over the upload limit. Trim the video or use smaller photos.");
       return;
     }
@@ -657,7 +639,6 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
       }
       if (nextSeed !== null) form.append("seed", String(nextSeed));
       if (app.kind === "paparazzi" && !uploads.scene && selectedToken) form.append("sceneToken", selectedToken);
-      if (sceneFile) form.append("scene", sceneFile, sceneFile.name);
 
       const response = await fetch(app.endpoint, { method: "POST", body: form, signal: controller.signal });
       setFindingScene(false);
@@ -753,22 +734,24 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
       />
     ) : null;
 
-  const cells = useMemo(() => {
+  const parts = useMemo(() => {
     if (!scene) return null;
     try {
-      return buildBoxCells(scene.positions, scene.indices, SCENE_POLYGON_DEFAULT);
+      return buildPartBoxes(scene.positions, scene.indices);
     } catch {
       return null;
     }
   }, [scene]);
 
+  // Steps layout: the video job starts as soon as the clip is prepared. The 3D subject is made in parallel
+  // and is only the loading screen, so the job never waits for it.
   useEffect(() => {
-    if (layout !== "steps" || !autoRun.current || sceneState !== "ready" || !scene || busy) return;
+    if (layout !== "steps" || !autoRun.current || !uploads.video || busy) return;
     autoRun.current = false;
     void run();
-    // run reads the latest uploads and scene from this render; it should fire once when the subject is ready.
+    // run reads the latest uploads from this render; it should fire once when the clip is ready.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layout, sceneState, scene]);
+  }, [layout, uploads.video]);
 
   const selectedScene = selectedToken ? `/api/paparazzi/scene?token=${encodeURIComponent(selectedToken)}` : "";
   const status = findingScene
@@ -797,15 +780,18 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
   if (layout === "steps" && app.kind === "reverse-3d") {
     const video = uploads.video;
     const building = sceneState === "building";
-    const loaderDone = Boolean(active && shownId === active.id);
+    // Without a 3D toy there is nothing to finish, so the result opens as soon as the video is ready.
+    const loaderDone = Boolean(active && (shownId === active.id || !parts));
     const reached: Step = active ? 3 : video || building ? 2 : 1;
     const implied: Step = active ? (loaderDone ? 3 : 2) : video || building ? 2 : 1;
     const step: Step = busy ? 2 : (pick ?? implied);
-    const replay = step === 2 && loaderDone && !busy;
+    const replay = step === 2 && Boolean(active) && shownId === active?.id && !busy;
     const failed = phase === "error" && Boolean(error);
+    const unreadable = sceneState === "error" && !video;
     const takeVideo = (file: File) => {
       setPick(null);
       setActiveId(null);
+      setShownId(null);
       setPhase("idle");
       setError(null);
       setRecovery(null);
@@ -819,21 +805,33 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
       downloadBlob(active.compareBlob, filename);
       setToast(filename);
     };
-    const headline = failed
-      ? "That did not work"
-      : sceneState === "error"
-        ? "Could not read that shot"
-        : building
-          ? need || "Reading the shot…"
-          : phase === "queued"
-            ? "Queued…"
+    const headline = replay
+      ? "Built again, just for fun"
+      : failed
+        ? "The render did not work"
+        : unreadable
+          ? "Could not read that shot"
+          : !video
+            ? "Checking the clip…"
             : phase === "running"
-              ? `Un-rendering · ${Math.round(progress * 100)}%`
+              ? `Rendering · ${Math.round(progress * 100)}%`
               : active
                 ? "Done!"
-                : "Getting ready…";
-    const detail = failed ? error : sceneState === "error" ? need : !building && need ? need : null;
-    const loaderBar = building ? 0.04 : active ? 1 : bar;
+                : "Rendering · queued";
+    const toyLine = failed
+      ? error
+      : unreadable
+        ? need
+        : replay
+          ? null
+          : parts
+            ? "Drag to spin your 3D blockout, click a block."
+            : building
+              ? "Building a 3D blockout to play with…"
+              : sceneState === "error"
+                ? "No 3D blockout this time, the video is still rendering."
+                : null;
+    const loaderBar = active ? 1 : bar;
     return (
       <article className="card r3d" data-step={step}>
         <StepNav
@@ -844,21 +842,16 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
             setPick(next === implied ? null : next);
           }}
         />
-        {scene ? (
-          <div className="r3d-capture" aria-hidden="true" style={{ aspectRatio: video && video.height ? `${video.width} / ${video.height}` : "16 / 9" }}>
-            {sceneView}
-          </div>
-        ) : null}
         {step === 1 ? (
           <div className="r3d-one">
             <DropZone
               title="Which shot should we un‑render?"
-              sub={`MP4, MOV or WebM · 3 to ${REVERSE_3D_MAX_SECONDS} s`}
+              sub={`MP4, MOV or WebM · any length, we use the first ${REVERSE_3D_MAX_SECONDS} s`}
               hot={hot === "video"}
               onHot={(on) => setHot(on ? "video" : null)}
               onFile={takeVideo}
             />
-            <div className="need" role="status">{sceneState === "error" || failed ? null : need}</div>
+            <div className="need" role="status">{unreadable || failed ? null : need}</div>
             {video ? (
               <button type="button" className="btn r3d-keep" onClick={() => setPick(null)}>
                 Back to {video.name} <span className="arrow" aria-hidden="true">→</span>
@@ -868,20 +861,19 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
         ) : null}
         {step === 2 ? (
           <div className="r3d-two">
-            <div className="preview r3d-build" data-hud={cells ? "persp · drag to orbit · click a block" : "persp"}>
+            <div className="preview r3d-build" data-hud={parts ? "persp · drag to orbit · click a block" : "persp"}>
               <BlockBuild
-                cells={cells}
-                progress={busy ? progress : active ? 1 : 0}
+                parts={parts}
                 done={Boolean(active) && !busy}
                 onFinished={() => {
                   if (active) setShownId(active.id);
                   setPick(null);
                 }}
               />
-              <div className={`r3d-status${failed || sceneState === "error" ? " bad" : ""}`} aria-live="polite">
-                <b>{replay ? "Built again, just for fun" : headline}</b>
-                {detail ? <p>{detail}</p> : null}
-                {failed || sceneState === "error" ? (
+              <div className={`r3d-status${failed || unreadable ? " bad" : ""}`} aria-live="polite">
+                <b>{headline}</b>
+                {toyLine ? <p>{toyLine}</p> : null}
+                {failed || unreadable ? (
                   <div className="r3d-status-actions">
                     {failed ? (
                       <button type="button" className="btn dark" onClick={() => void (recovery ? resume() : run())}>
@@ -1133,7 +1125,7 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
           <div className="need" role="status">
             {phase === "error" && error ? error : need}
           </div>
-          <button className="run" type="button" onClick={() => void (recovery && phase === "error" ? resume() : run())} disabled={busy || searching || (app.kind === "reverse-3d" && Boolean(uploads.video) && sceneState !== "ready")}>
+          <button className="run" type="button" onClick={() => void (recovery && phase === "error" ? resume() : run())} disabled={busy || searching}>
             <span className="label">
               {busy ? (
                 findingScene ? "Searching…" : phase === "queued" ? "Queued…" : "Running…"

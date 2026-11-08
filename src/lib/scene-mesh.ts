@@ -67,14 +67,14 @@ type BoxGrid = {
   originZ: number;
 };
 
-function boxGrid(positions: Float32Array, indices: ArrayLike<number>, targetPolygons: number): BoxGrid {
+function boxGrid(positions: Float32Array, indices: ArrayLike<number>, targetPolygons: number, fixedCells?: number): BoxGrid {
   if (positions.length < 9 || indices.length < 3) throw new Error("Could not build a scene mesh.");
   const faces = Math.floor(indices.length / 3);
   const finest = Math.max(6, Math.min(24, Math.round(Math.cbrt(faces) * 1.6)));
   const coarsest = Math.max(3, Math.round(finest * 0.22));
   const clamped = Math.max(SCENE_POLYGON_MIN, Math.min(SCENE_POLYGON_MAX, Math.round(targetPolygons)));
   const t = (clamped - SCENE_POLYGON_MIN) / (SCENE_POLYGON_MAX - SCENE_POLYGON_MIN);
-  const cells = Math.max(coarsest, Math.round(coarsest + t * (finest - coarsest)));
+  const cells = fixedCells ?? Math.max(coarsest, Math.round(coarsest + t * (finest - coarsest)));
   const { min, max } = meshBounds(positions);
   const span: [number, number, number] = [
     Math.max(1e-4, max[0] - min[0]),
@@ -391,4 +391,104 @@ export function projectPoint(
     y: (1 - (ny * 0.5 + 0.5)) * height,
     visible: nz > -1 && nz < 1,
   };
+}
+
+export type PartBox = {
+  /** Centre in world units. */
+  center: [number, number, number];
+  /** Edge lengths in world units. */
+  size: [number, number, number];
+};
+
+export type PartBoxes = {
+  boxes: PartBox[];
+  /** World height of the ground under the subject. */
+  floorY: number;
+};
+
+/** Grid cells along the subject's longer side for the part split. Coarse on purpose. */
+const PART_CELLS = 24;
+const PART_MAX = 12;
+/** A part may cover some empty cells, so it reads as one block instead of a staircase. */
+const PART_FILL = 0.9;
+const PART_SLICE = 0.8;
+
+/**
+ * Split the subject into a few big blocks: a head, a body, arms, legs.
+ * Greedy: take the biggest mostly-filled box of the voxel volume, mark it used, repeat.
+ */
+export function buildPartBoxes(positions: Float32Array, indices: ArrayLike<number>): PartBoxes {
+  const { cols, rows, depth, filled, cube, originX, originY, originZ } = boxGrid(positions, indices, SCENE_POLYGON_MAX, PART_CELLS);
+  const idx = (x: number, y: number, z: number) => x + y * cols + z * cols * rows;
+  const free = new Uint8Array(cols * rows * depth);
+  let total = 0;
+  for (let z = 0; z < depth; z += 1)
+    for (let y = 0; y < rows; y += 1)
+      for (let x = 0; x < cols; x += 1)
+        if (filled(x, y, z)) {
+          free[idx(x, y, z)] = 1;
+          total += 1;
+        }
+  if (total === 0) throw new Error("Could not build a scene mesh.");
+  const W = cols + 1;
+  const H = rows + 1;
+  const sums = new Int32Array(W * H * (depth + 1));
+  const sIdx = (x: number, y: number, z: number) => x + y * W + z * W * H;
+  const rebuild = () => {
+    for (let z = 1; z <= depth; z += 1)
+      for (let y = 1; y <= rows; y += 1)
+        for (let x = 1; x <= cols; x += 1)
+          sums[sIdx(x, y, z)] =
+            free[idx(x - 1, y - 1, z - 1)] +
+            sums[sIdx(x - 1, y, z)] + sums[sIdx(x, y - 1, z)] + sums[sIdx(x, y, z - 1)] -
+            sums[sIdx(x - 1, y - 1, z)] - sums[sIdx(x - 1, y, z - 1)] - sums[sIdx(x, y - 1, z - 1)] +
+            sums[sIdx(x - 1, y - 1, z - 1)];
+  };
+  const count = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) =>
+    sums[sIdx(x1, y1, z1)] - sums[sIdx(x0, y1, z1)] - sums[sIdx(x1, y0, z1)] - sums[sIdx(x1, y1, z0)] +
+    sums[sIdx(x0, y0, z1)] + sums[sIdx(x0, y1, z0)] + sums[sIdx(x1, y0, z0)] - sums[sIdx(x0, y0, z0)];
+
+  /** Every horizontal and vertical slice must be mostly filled, so a narrow head or a gap between legs splits the box. */
+  const slicesFull = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) => {
+    const across = (x1 - x0) * (z1 - z0);
+    for (let y = y0; y < y1; y += 1) if (count(x0, y, z0, x1, y + 1, z1) < across * PART_SLICE) return false;
+    const side = (y1 - y0) * (z1 - z0);
+    for (let x = x0; x < x1; x += 1) if (count(x, y0, z0, x + 1, y1, z1) < side * PART_SLICE) return false;
+    return true;
+  };
+  const boxes: PartBox[] = [];
+  let left = total;
+  while (boxes.length < PART_MAX && left > total * 0.06) {
+    rebuild();
+    let best = { score: 0, box: [0, 0, 0, 0, 0, 0] };
+    for (let z0 = 0; z0 < depth; z0 += 1)
+      for (let y0 = 0; y0 < rows; y0 += 1)
+        for (let x0 = 0; x0 < cols; x0 += 1) {
+          if (!free[idx(x0, y0, z0)]) continue;
+          for (let x1 = x0 + 1; x1 <= cols; x1 += 1)
+            for (let y1 = y0 + 1; y1 <= rows; y1 += 1)
+              for (let z1 = z0 + 1; z1 <= depth; z1 += 1) {
+                const volume = (x1 - x0) * (y1 - y0) * (z1 - z0);
+                if (volume <= best.score) continue;
+                const inside = count(x0, y0, z0, x1, y1, z1);
+                if (inside < volume * PART_FILL) break;
+                if (inside > best.score && slicesFull(x0, y0, z0, x1, y1, z1)) best = { score: inside, box: [x0, y0, z0, x1, y1, z1] };
+              }
+        }
+    if (best.score < Math.max(2, total * 0.015)) break;
+    const [x0, y0, z0, x1, y1, z1] = best.box;
+    for (let z = z0; z < z1; z += 1)
+      for (let y = y0; y < y1; y += 1)
+        for (let x = x0; x < x1; x += 1) {
+          if (free[idx(x, y, z)]) left -= 1;
+          free[idx(x, y, z)] = 0;
+        }
+    boxes.push({
+      center: [originX + ((x0 + x1) / 2) * cube, originY + ((y0 + y1) / 2) * cube, originZ + ((z0 + z1) / 2) * cube],
+      size: [(x1 - x0) * cube, (y1 - y0) * cube, (z1 - z0) * cube],
+    });
+  }
+  if (boxes.length === 0) throw new Error("Could not build a scene mesh.");
+  const floorY = Math.min(...boxes.map((box) => box.center[1] - box.size[1] / 2));
+  return { boxes, floorY };
 }
