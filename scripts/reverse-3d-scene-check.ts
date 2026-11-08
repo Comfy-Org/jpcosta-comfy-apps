@@ -29,17 +29,29 @@ import {
   backgroundModelForDeployment,
   backgroundModelName,
   buildCutoutWorkflow,
+  assembleScene,
+  boxInCrop,
   buildHunyuanWorkflow,
+  buildMarkWorkflow,
   buildPickWorkflow,
+  closeUpCrop,
   comboOptions,
   cutoutAssetToken,
-  MOCK_SCENE_REPLY,
+  MAX_SUBJECTS,
+  MOCK_FIND_REPLY,
+  MOCK_MARK_REPLY,
+  parseSceneFind,
+  parseSceneMarks,
   parseSubjectChoice,
-  parseSubjectScene,
+  partOnFrame,
   selectMeshOutput,
   selectTextOutput,
   MESH_KEEP_FRACTION,
+  type FrameBox,
+  type FramePart,
+  type SubjectKind,
 } from "../src/lib/subject-pipeline";
+import { REVERSE_3D_RENDERS_VIDEO } from "../src/lib/reverse-3d-switch";
 import { durationOverCap, readContainerDurationSeconds } from "../src/lib/video-duration";
 import { acceptedClipDuration, REVERSE_3D_MAX_SECONDS } from "../src/lib/video-client";
 import { buildJobBody } from "../src/lib/workflow";
@@ -167,196 +179,375 @@ async function main() {
   const pick = buildPickWorkflow(12);
   assert.equal(pick["20"]?.class_type, "GeminiNodeV3");
   assert.equal(pick["21"]?.class_type, "SaveText");
+  assert.equal(pick["21"]?.inputs.filename_prefix, "reverse-3d/subjects");
   assert.equal(Object.keys(pick).filter((id) => pick[id]?.class_type === "LoadImage").length, 12);
   for (let index = 1; index <= 12; index += 1) {
     assert.deepEqual(pick["20"]?.inputs[`model.images.image_${index}`], [String(index), 0]);
   }
-  assert.match(String(pick["20"]?.inputs["model.prompt"]), /main subject/);
-  assert.match(String(pick["20"]?.inputs["model.prompt"]), /"parts": \[\{"name": "head", "a": \[y, x\], "b": \[y, x\]/);
-  assert.match(String(pick["20"]?.inputs["model.prompt"]), /"props": \[\{"name": "table", "a": \[y, x\], "b": \[y, x\]/);
-  assert.match(String(pick["20"]?.inputs["model.prompt"]), /from 1 to 12/);
+  const findPrompt = String(pick["20"]?.inputs["model.prompt"]);
+  assert.match(findPrompt, /find every person, animal and vehicle/);
+  assert.match(findPrompt, /"subjects": \[\{"name": "man in a red jacket", "kind": "person", "box": \[ymin, xmin, ymax, xmax\], "m": 1.7\}\]/);
+  assert.match(findPrompt, /from 1 to 12/);
+  assert.match(findPrompt, new RegExp(`at most ${MAX_SUBJECTS}`));
   assert.equal(pick["20"]?.inputs["model.thinking_level"], "LOW");
-  assert.equal(pick["20"]?.inputs["model.max_output_tokens"], 8192);
-  // No image-to-3D step: the pick job is the whole 3D toy.
+  assert.equal(pick["20"]?.inputs["model.max_output_tokens"], 4096);
+  // No image-to-3D step: two Gemini jobs are the whole 3D toy.
   assert.equal(JSON.stringify(pick).includes("Tencent"), false);
 
-  const scene = parseSubjectScene(
+  const markGraph = buildMarkWorkflow(["person", "vehicle"], [[100, 200, 900, 800], [150.4, 100, 850, 900]]);
+  assert.equal(markGraph["1"]?.inputs.image, "frame.png");
+  assert.equal(markGraph["2"]?.inputs.image, "subject_1.png");
+  assert.equal(markGraph["3"]?.inputs.image, "subject_2.png");
+  assert.deepEqual(markGraph["20"]?.inputs["model.images.image_1"], ["1", 0]);
+  assert.deepEqual(markGraph["20"]?.inputs["model.images.image_3"], ["3", 0]);
+  assert.equal(markGraph["20"]?.inputs["model.images.image_4"], undefined);
+  assert.equal(markGraph["21"]?.inputs.filename_prefix, "reverse-3d/parts");
+  assert.equal(markGraph["20"]?.inputs["model.max_output_tokens"], 16384);
+  const markText = String(markGraph["20"]?.inputs["model.prompt"]);
+  assert.match(markText, /Image 2 shows a person inside the box \[100, 200, 900, 800\]\. Image 3 shows a vehicle inside the box \[150, 100, 850, 900\]\./);
+  assert.match(markText, /a wheel from the bottom of the tire to its top/);
+  assert.match(markText, /"subjects": \[\{"image": 2, "parts": \[\{"name": "head", "a": \[y, x\], "b": \[y, x\]/);
+  assert.throws(() => buildMarkWorkflow([], []), /1 to 8 close-ups/);
+  assert.throws(() => buildMarkWorkflow(Array<SubjectKind>(9).fill("person"), []), /1 to 8 close-ups/);
+
+  // First job: the frame and everyone in it.
+  const found = parseSceneFind(
     [
       "```json",
       "{",
       '  "frame": 3,',
-      '  "subject": "a dancer",',
-      '  "parts": [',
-      '    {"name": "torso", "a": [300, 500], "b": [520, 505], "w": 0.6, "d": 0.5, "z": 0},',
-      '    {"name": "head", "a": [290, 500], "b": [180, 502], "z": 1.4},',
-      '    {"name": "dot", "a": [400, 400], "b": [401, 401], "w": 0.5},',
-      '    {"name": "no end", "a": [400, 400]},',
-      '    {"name": "  ", "a": [520, 480], "b": [700, -40], "w": 9, "d": -2, "z": -3}',
-      "  ],",
-      '  "props": [',
-      '    {"name": "chair", "box_2d": [800, 700, 560, 520], "d": 0.9, "z": -1},',
-      '    {"name": "speck", "box_2d": [500, 500, 502, 600]},',
-      '    {"name": "board", "a": [300, 300], "b": [520, 560], "w": 0.25, "d": 0.15, "z": 1},',
-      '    {"name": "flat board", "a": [300, 300], "b": [301, 301]}',
+      '  "subjects": [',
+      '    {"name": "dancer", "kind": "person", "box": [900, 600, 100, 400], "m": 1.6},',
+      '    {"name": "dancer again", "kind": "person", "box": [110, 405, 895, 600]},',
+      '    {"name": "speck", "kind": "person", "box": [500, 500, 520, 530]},',
+      '    {"name": "", "kind": "robot", "box": [600, 700, 800, 900]},',
+      '    {"name": "dog", "kind": "animal", "box_2d": [700, 100, 950, 300], "m": "big"},',
+      '    {"name": "no box", "kind": "person"}',
       "  ]",
       "}",
       "```",
     ].join("\r\n"),
     6,
   );
-  assert.equal(scene.frame, 2);
-  assert.equal(scene.subject, "a dancer");
-  assert.deepEqual(scene.parts.map((part) => part.name), ["torso", "head", "part"]);
-  assert.deepEqual(scene.parts[1], { name: "head", a: [290, 500], b: [180, 502], w: 0.4, d: 0.8, z: 1 }, "defaults and a rounded side");
-  assert.deepEqual(scene.parts[2], { name: "part", a: [520, 480], b: [700, 0], w: 3, d: 0.8, z: -1 }, "points and ratios are clamped");
-  assert.deepEqual(scene.props, [
-    { name: "chair", box: [560, 520, 800, 700], d: 0.9, z: -1 },
-    { name: "board", a: [300, 300], b: [520, 560], w: 0.25, d: 0.15, z: 1 },
-  ]);
-  const cutShort = parseSubjectScene(
-    '{"frame": 1, "subject": "a dog", "parts": [{"name": "body", "a": [500, 300], "b": [500, 600], "w": 0.5}, {"name": "head", "a": [480, 620], "b": [4',
+  assert.equal(found.frame, 2);
+  assert.equal(found.subject, "dancer");
+  assert.deepEqual(found.subjects, [
+    { name: "dancer", kind: "person", box: [100, 400, 900, 600], m: 1.6 },
+    { name: "object", kind: "object", box: [600, 700, 800, 900], m: 0.8 },
+    { name: "dog", kind: "animal", box: [700, 100, 950, 300], m: 0.6 },
+  ], "corners are put in order, a repeat and a speck are dropped, an unknown kind is an object");
+  assert.throws(() => parseSceneFind('{"subjects": []}', 4), /choose a frame/);
+  assert.throws(() => parseSceneFind('{"frame": 7, "subjects": []}', 6), /not sampled/);
+  assert.throws(() => parseSceneFind('{"frame": 1, "subjects": [{"name": "dot", "kind": "person", "box": [1, 1, 5, 5]}]}', 4), /did not find anyone/);
+  const cutFind = parseSceneFind(
+    '{"frame": 2, "subjects": [{"name": "rider", "kind": "person", "box": [100, 100, 900, 400], "m": 1.8}, {"name": "bike", "kind": "vehicle", "box": [500, 50',
     4,
   );
-  assert.deepEqual(cutShort.parts.map((part) => part.name), ["body"], "a reply cut short keeps the parts it finished");
-  assert.equal(cutShort.subject, "a dog");
-  const cutInProps = parseSubjectScene(
-    '{"frame": 1, "subject": "a skater", "parts": [{"name": "torso", "a": [200, 500], "b": [480, 500], "w": 0.5}], "props": [{"name": "board", "a": [290, 300], "b": [520, 560], "w": 0.25, "d": 0.15, "z": 1}, {"name": "bag", "a": [6',
-    4,
-  );
-  assert.deepEqual(cutInProps.parts.map((part) => part.name), ["torso"]);
-  assert.deepEqual(cutInProps.props.map((prop) => prop.name), ["board"], "an object after the props key is a prop, not a part");
-  assert.throws(() => parseSubjectScene('{"frame": 1, "subject": "a cat", "parts": []}', 4), /did not mark any parts/);
-  assert.throws(
-    () => parseSubjectScene('{"frame": 1, "subject": "a cat", "parts": [], "props": [{"name": "wall", "box_2d": [0, 0, 900, 900]}]}', 4),
-    /did not mark any parts/,
-  );
-  const crowd = JSON.stringify({
+  assert.deepEqual(cutFind.subjects.map((subject) => subject.name), ["rider"], "a reply cut short keeps the subjects it finished");
+  assert.equal(cutFind.frame, 1);
+  const many = JSON.stringify({
     frame: 1,
-    subject: "a crowd",
-    parts: Array.from({ length: 30 }, (_, index) => ({ name: `p${index}`, a: [100 + index * 20, 400], b: [110 + index * 20, 420] })),
-    props: Array.from({ length: 6 }, (_, index) => ({ name: `box${index}`, box_2d: [700, index * 100, 800, index * 100 + 80] })),
+    subjects: Array.from({ length: 12 }, (_, index) => ({ name: `p${index}`, kind: "person", box: [100, index * 80, 900, index * 80 + 70] })),
   });
-  assert.equal(parseSubjectScene(crowd, 4).parts.length, 16);
-  assert.equal(parseSubjectScene(crowd, 4).props.length, 3);
+  assert.equal(parseSceneFind(many, 4).subjects.length, MAX_SUBJECTS);
 
-  const mockScene = parseSubjectScene(MOCK_SCENE_REPLY, 12);
+  // Each subject's close-up: its box with a margin, inside the frame, and back again.
   const wide = 16 / 9;
-  const laid = layoutFrameScene(mockScene, wide);
-  assert.equal(laid.boxes.length, mockScene.parts.length + mockScene.props.length);
-  assert.ok(laid.boxes.some((box) => box.kind === "prop" && box.name === "table"));
-  const extent = (box: (typeof laid.boxes)[number]) => {
-    const cos = Math.abs(Math.cos(box.rotation ?? 0));
-    const sin = Math.abs(Math.sin(box.rotation ?? 0));
-    return { halfX: (cos * box.size[0] + sin * box.size[1]) / 2, halfY: (sin * box.size[0] + cos * box.size[1]) / 2 };
-  };
-  const partBoxes = laid.boxes.filter((box) => box.kind === "part");
-  const lowest = Math.min(...partBoxes.map((box) => box.center[1] - extent(box).halfY));
-  const highest = Math.max(...partBoxes.map((box) => box.center[1] + extent(box).halfY));
-  assert.ok(Math.abs(lowest - laid.floorY) < 1e-6, "the subject stands on the floor");
-  assert.ok(Math.abs(highest - lowest - 1.55) < 1e-6, "the subject is 1.55 tall");
-  assert.ok(Math.abs(lowest + highest) < 1e-6, "the subject is centred on the orbit target");
-  assert.equal(laid.cropped, false);
-  const head = laid.boxes.find((box) => box.name === "head");
-  const forearm = laid.boxes.find((box) => box.name === "left forearm");
-  assert.ok(head && forearm);
-  assert.ok(Math.abs(head.rotation ?? 0) < 0.05, "an upright head is not turned");
-  assert.ok(forearm.center[2] > 0, "a part marked closer sits in front of the body");
-  const table = laid.boxes.find((box) => box.name === "table");
-  assert.ok(table && table.center[2] < 0, "a prop marked farther sits behind the subject");
-  const level = layoutFrameScene({ parts: [{ name: "arm", a: [500, 200], b: [500, 600], w: 0.3, d: 1, z: 0 }], props: [] }, wide);
-  assert.ok(Math.abs(Math.abs(level.boxes[0]!.rotation ?? 0) - Math.PI / 2) < 1e-6, "a level limb lies on its side");
+  const tall: FrameBox = [150, 300, 900, 450];
+  const crop = closeUpCrop(tall, wide);
+  assert.ok(crop[0] <= 150 && crop[1] <= 300 && crop[2] >= 900 && crop[3] >= 450, "the close-up holds the whole subject");
+  assert.ok(crop[0] >= 0 && crop[1] >= 0 && crop[2] <= 1000 && crop[3] <= 1000, "and stays inside the frame");
+  const cropAspect = ((crop[3] - crop[1]) * wide) / (crop[2] - crop[0]);
+  assert.ok(cropAspect >= 0.6 - 1e-9, `a standing person gets room at the sides: ${cropAspect}`);
+  const edge = closeUpCrop([0, 900, 600, 1000], wide);
+  assert.ok(Math.abs(edge[3] - 1000) < 1e-9 && edge[1] < 900 - 100, "a subject at the edge slides the cut inside instead of shrinking it");
+  const inner = boxInCrop(tall, crop);
+  const back = partOnFrame({ name: "box", a: [inner[0], inner[1]], b: [inner[2], inner[3]], w: 1, d: 1, z: 0 }, crop);
+  assert.ok(
+    Math.abs(back.a[0] - 150) < 1e-9 && Math.abs(back.a[1] - 300) < 1e-9 && Math.abs(back.b[0] - 900) < 1e-9 && Math.abs(back.b[1] - 450) < 1e-9,
+    "a box put in a close-up and back lands where it was",
+  );
 
-  // Seen from the starting camera, a point on the subject lines up with the same point on the frame behind it.
+  // Second job: each close-up's parts.
+  const marks = parseSceneMarks(
+    '```json\n{"subjects": [{"image": 3, "parts": [{"name": "wheel", "a": [900, 300], "b": [500, 300], "w": 1, "d": 0.3, "z": 1}]}, {"image": 2, "parts": [{"name": "head", "a": [200, 500], "b": [100, 500], "z": 2}, {"name": "dot", "a": [400, 400], "b": [401, 401]}, {"name": "  ", "a": [520, 480], "b": [700, -40], "w": 9, "d": -2, "z": -3}]}]}\n```',
+    3,
+  );
+  assert.deepEqual(marks, [
+    [
+      { name: "head", a: [200, 500], b: [100, 500], w: 0.4, d: 0.8, z: 1 },
+      { name: "part", a: [520, 480], b: [700, 0], w: 3, d: 0.8, z: -1 },
+    ],
+    [{ name: "wheel", a: [900, 300], b: [500, 300], w: 1, d: 0.3, z: 1 }],
+    null,
+  ], "defaults, clamped points and ratios, a dot dropped, and a close-up left unmarked");
+  const fromOne = parseSceneMarks('{"subjects": [{"image": 1, "parts": [{"name": "torso", "a": [300, 500], "b": [600, 500], "w": 0.6}]}]}', 2);
+  assert.equal(fromOne[0]?.[0]?.name, "torso", "close-ups counted from 1 are moved back to image 2");
+  const cutMarks = parseSceneMarks(
+    '{"subjects": [{"image": 2, "parts": [{"name": "head", "a": [200, 500], "b": [100, 500], "w": 0.8}]}, {"image": 3, "parts": [{"name": "body", "a": [500, 100], "b": [500, 900], "w": 0.4}, {"name": "tail", "a": [5',
+    2,
+  );
+  assert.deepEqual(cutMarks.map((mark) => mark?.map((part) => part.name)), [["head"], ["body"]], "a reply cut short keeps each close-up's finished parts");
+  const crowdMarks = parseSceneMarks(
+    JSON.stringify({ subjects: [{ image: 2, parts: Array.from({ length: 30 }, (_, index) => ({ name: `p${index}`, a: [100 + index * 20, 400], b: [110 + index * 20, 420] })) }] }),
+    1,
+  );
+  assert.equal(crowdMarks[0]?.length, 16);
+
+  // Both jobs together.
+  const sceneFind = parseSceneFind(
+    JSON.stringify({
+      frame: 1,
+      subjects: [
+        { name: "runner", kind: "person", box: [150, 300, 900, 450], m: 1.8 },
+        { name: "crate", kind: "object", box: [700, 600, 900, 800], m: 0.5 },
+        { name: "stool", kind: "object", box: [650, 100, 950, 250], m: 0.6 },
+        { name: "cat", kind: "animal", box: [800, 850, 950, 990], m: 0.3 },
+      ],
+    }),
+    1,
+  );
+  const sceneCrops = sceneFind.subjects.map((subject) => closeUpCrop(subject.box, wide));
+  const crateInner = boxInCrop(sceneFind.subjects[1]!.box, sceneCrops[1]!);
+  const crateMiddle = (crateInner[0] + crateInner[2]) / 2;
+  const assembled = assembleScene(
+    sceneFind,
+    [
+      [{ name: "torso", a: [300, 500], b: [600, 500], w: 0.6, d: 0.6, z: 0 }],
+      [{ name: "crate", a: [crateMiddle, crateInner[1]], b: [crateMiddle, crateInner[3]], w: 1, d: 1, z: 0 }],
+      [{ name: "seat", a: [0, 0], b: [1000, 1000], w: 0.1, d: 1, z: 0 }],
+      null,
+    ],
+    sceneCrops,
+    wide,
+  );
+  assert.deepEqual(assembled.subjects.map((subject) => subject.parts.map((part) => part.name)), [["torso"], ["crate"], ["stool"], ["cat"]]);
+  const crateOnFrame = assembled.subjects[1]!.parts[0]!;
+  assert.ok(
+    Math.abs(crateOnFrame.a[0] - 800) < 1e-6 && Math.abs(crateOnFrame.a[1] - 600) < 1e-6 && Math.abs(crateOnFrame.b[1] - 800) < 1e-6,
+    "marks inside an object's box are kept, moved onto the frame",
+  );
+  const stoolOnFrame = assembled.subjects[2]!.parts[0]!;
+  assert.deepEqual([stoolOnFrame.a, stoolOnFrame.b], [[950, 175], [650, 175]], "an object marked outside its box is one block over the box");
+  const catOnFrame = assembled.subjects[3]!.parts[0]!;
+  assert.deepEqual([catOnFrame.a, catOnFrame.b], [[875, 850], [875, 990]], "an unmarked subject lies along its longer side");
+
+  // A car seen at an angle, marked as the model marked one: the body's line kept, its thickness halved.
+  const carFind = parseSceneFind(JSON.stringify({ frame: 1, subjects: [{ name: "car", kind: "vehicle", box: [508, 233, 769, 771], m: 1.4 }] }), 1);
+  const carCrop = closeUpCrop(carFind.subjects[0]!.box, wide);
+  const carMarks: FramePart[] = [
+    { name: "lower body", a: [596, 118], b: [431, 888], w: 0.35, d: 1, z: 0 },
+    { name: "cabin", a: [381, 381], b: [338, 865], w: 0.3, d: 0.9, z: 0 },
+    { name: "front wheel", a: [766, 375], b: [504, 375], w: 0.45, d: 0.3, z: 1 },
+  ];
+  const shaped = assembleScene(carFind, [carMarks], [carCrop], wide).subjects[0]!.parts;
+  assert.deepEqual(shaped.map((part) => part.name), ["lower body", "cabin", "front wheel"]);
+  const [shapedBody, shapedCabin, shapedWheel] = shaped as [FramePart, FramePart, FramePart];
+  const markedBody = partOnFrame(carMarks[0]!, carCrop);
+  assert.deepEqual([shapedBody.a, shapedBody.b], [markedBody.a, markedBody.b], "the car's body keeps its marked line and slant");
+  const bodyLength = Math.hypot((shapedBody.b[1] - shapedBody.a[1]) * wide, shapedBody.b[0] - shapedBody.a[0]);
+  const bodyThick = shapedBody.w * bodyLength;
+  assert.ok(Math.abs(bodyThick - 0.5 * 261) < 1e-6, `a body marked too thick is half the car's height: ${bodyThick}`);
+  assert.equal(shapedCabin.a[0], shapedCabin.b[0], "the cabin stands level");
+  const cabinTall = shapedCabin.w * (shapedCabin.b[1] - shapedCabin.a[1]) * wide;
+  assert.ok(Math.abs(shapedCabin.a[0] - cabinTall / 2 - 508) < 1e-6, "the cabin reaches the roof");
+  const bodyTopAt = (x: number) =>
+    shapedBody.a[0] + ((shapedBody.b[0] - shapedBody.a[0]) * (x - shapedBody.a[1])) / (shapedBody.b[1] - shapedBody.a[1]) - bodyThick / 2;
+  assert.ok(Math.abs(shapedCabin.a[0] + cabinTall / 2 - bodyTopAt(shapedCabin.a[1])) < 1e-6, "the cabin stands on the body, with no gap");
+  assert.deepEqual(shapedWheel, partOnFrame(carMarks[2]!, carCrop), "the wheels are kept as marked");
+  const shapedLaid = layoutFrameScene({ subjects: [{ name: "car", kind: "vehicle", m: 1.4, parts: shaped }] }, wide);
+  const slantedBody = shapedLaid.boxes.find((box) => box.name === "lower body")!;
+  assert.ok(Math.abs(Math.abs(slantedBody.rotation ?? 0) - Math.PI / 2) > 0.05, "a car seen at an angle keeps its slant");
+  const shapedPlate = shapedLaid.plate!;
+  const bodyFront = (shapedLaid.camera!.distance - (slantedBody.center[2] + slantedBody.size[2] / 2)) / shapedLaid.camera!.distance;
+  const bodyOnPlate = (bodyLength / 1000) * shapedPlate.size[1];
+  assert.ok(Math.abs(slantedBody.size[1] / bodyFront - bodyOnPlate) < 1e-9, "the car body's front face is exactly as long as the car looks");
+  const [nearWheel, farWheel] = ["front wheel", "far front wheel"].map((name) => shapedLaid.boxes.find((box) => box.name === name)!);
+  assert.ok(nearWheel && farWheel, "the far wheel is added");
+  assert.deepEqual([farWheel.center[1], farWheel.size], [nearWheel.center[1], nearWheel.size], "the far wheel is the same wheel across the car, on the same ground");
+  assert.ok(farWheel.center[2] < nearWheel.center[2]);
+  const carLook = (box: (typeof shapedLaid.boxes)[number]) =>
+    (box.center[0] - shapedLaid.camera!.target[0]) / (shapedLaid.camera!.distance - box.center[2] - box.size[2] / 2);
+  assert.ok(Math.abs(carLook(farWheel) - carLook(nearWheel)) < 1e-9, "from the camera, the far wheel hides straight behind the near one");
+
+  // The blocks: every subject of the sample, lined up with the frame from the starting camera.
+  const mockFind = parseSceneFind(MOCK_FIND_REPLY, 12);
+  const mockCrops = mockFind.subjects.map((subject) => closeUpCrop(subject.box, wide));
+  const mockMarks = parseSceneMarks(MOCK_MARK_REPLY, mockFind.subjects.length);
+  assert.ok(mockMarks.every(Boolean), "the sample marks every subject");
+  const mockScene = assembleScene(mockFind, mockMarks, mockCrops, wide);
+  const mockParts = mockScene.subjects.flatMap((subject) => subject.parts);
+  assert.ok(mockScene.subjects[2]!.parts.length > 1, "the sample table keeps its top and legs");
+  const laid = layoutFrameScene(mockScene, wide);
+  assert.equal(laid.boxes.length, mockParts.length);
+  assert.deepEqual([...new Set(laid.boxes.map((box) => box.subject))], [0, 1, 2], "every subject is built");
+  assert.ok(laid.boxes.some((box) => box.name === "person waving · head"), "with several subjects, a block says whose it is");
+  assert.ok(laid.boxes.filter((box) => box.kind === "prop").length === mockScene.subjects[2]!.parts.length);
+  assert.equal(laid.cropped, false);
   assert.ok(laid.plate && laid.camera);
   const { plate, camera } = laid;
-  assert.ok(plate.center[2] < Math.min(...laid.boxes.map((box) => box.center[2] - box.size[2] / 2)), "the frame hangs behind every block");
-  const look = (point: [number, number, number]) => {
-    const depth = camera.distance - (point[2] - camera.target[2]);
-    return [(point[0] - camera.target[0]) / depth, (point[1] - camera.target[1]) / depth];
+  assert.equal(plate.center[2], camera.target[2], "the frame stands on the plane the camera turns around");
+  assert.ok(laid.boxes.some((box) => box.center[2] < plate.center[2]), "so a subject farther back stands behind it");
+  assert.ok(Math.abs(plate.size[0] / plate.size[1] - wide) < 1e-9, "the frame keeps its shape");
+  const look = (point: readonly number[]) => {
+    const depth = camera.distance - (point[2]! - camera.target[2]);
+    return [(point[0]! - camera.target[0]) / depth, (point[1]! - camera.target[1]) / depth] as const;
   };
   const onPlate = (y: number, x: number): [number, number, number] => [
     plate.center[0] + (x / 1000 - 0.5) * plate.size[0],
     plate.center[1] + (0.5 - y / 1000) * plate.size[1],
     plate.center[2],
   ];
-  const torsoPart = mockScene.parts.find((part) => part.name === "torso")!;
-  const torso = laid.boxes.find((box) => box.name === "torso")!;
-  const middle: [number, number] = [(torsoPart.a[0] + torsoPart.b[0]) / 2, (torsoPart.a[1] + torsoPart.b[1]) / 2];
-  const [seenX, seenY] = look([torso.center[0], torso.center[1], 0]);
-  const [plateX, plateY] = look(onPlate(middle[0], middle[1]));
-  assert.ok(Math.abs(seenX! - plateX!) < 1e-9 && Math.abs(seenY! - plateY!) < 1e-9, "the torso lines up with the frame");
-  const forearmPart = mockScene.parts.find((part) => part.name === "left forearm")!;
-  const forearmMiddle: [number, number] = [(forearmPart.a[0] + forearmPart.b[0]) / 2, (forearmPart.a[1] + forearmPart.b[1]) / 2];
-  const [nearX, nearY] = look(forearm.center);
-  const [nearPlateX, nearPlateY] = look(onPlate(forearmMiddle[0], forearmMiddle[1]));
-  assert.ok(Math.abs(nearX! - nearPlateX!) < 1e-9 && Math.abs(nearY! - nearPlateY!) < 1e-9, "a part in front still lines up with the frame");
-  const torsoFlat = layoutFrameScene({ parts: [{ ...torsoPart, z: 0 }], props: [] }, wide).boxes[0]!;
-  const nearTorso = layoutFrameScene({ parts: [{ ...torsoPart, z: 1 }], props: [] }, wide).boxes[0]!;
-  assert.ok(nearTorso.size[1] < torsoFlat.size[1], "a part moved toward the camera shrinks to keep its outline on the frame");
-  assert.ok(Math.abs(plate.size[0] / plate.size[1] - wide) < 1e-9, "the frame keeps its shape");
+  // What the camera sees of a block is its front face.
+  const frontOf = (box: (typeof laid.boxes)[number]) => [box.center[0], box.center[1], box.center[2] + box.size[2] / 2] as const;
+  const linedUp = (box: (typeof laid.boxes)[number], part: FramePart) => {
+    const [seenX, seenY] = look(frontOf(box));
+    const [plateX, plateY] = look(onPlate((part.a[0] + part.b[0]) / 2, (part.a[1] + part.b[1]) / 2));
+    return Math.abs(seenX - plateX) < 1e-9 && Math.abs(seenY - plateY) < 1e-9;
+  };
+  laid.boxes.forEach((box, index) => assert.ok(linedUp(box, mockParts[index]!), `${box.name} lines up with the frame`));
+  const subjectZ = (index: number) => {
+    const own = laid.boxes.filter((box) => box.subject === index && !/forearm/.test(box.name ?? ""));
+    return own.reduce((sum, box) => sum + box.center[2], 0) / own.length;
+  };
+  assert.ok(subjectZ(1) < subjectZ(0), "the person who looks smaller for their height stands farther back");
+  const extent = (box: (typeof laid.boxes)[number]) => {
+    const cos = Math.abs(Math.cos(box.rotation ?? 0));
+    const sin = Math.abs(Math.sin(box.rotation ?? 0));
+    return { halfX: (cos * box.size[0] + sin * box.size[1]) / 2, halfY: (sin * box.size[0] + cos * box.size[1]) / 2 };
+  };
+  const lowestOf = (boxes: typeof laid.boxes) => Math.min(...boxes.map((box) => box.center[1] - extent(box).halfY));
+  assert.ok(Math.abs(lowestOf(laid.boxes.filter((box) => box.subject === 0)) - laid.floorY) < 1e-6, "the middle subject stands on the floor");
+  const waving = laid.boxes.find((box) => box.name === "person waving · head")!;
+  assert.ok(Math.abs(waving.rotation ?? 0) < 0.05, "an upright head is not turned");
+  const raised = laid.boxes.find((box) => box.name === "person waving · right forearm")!;
+  const raisedArm = laid.boxes.find((box) => box.name === "person waving · right upper arm")!;
+  assert.ok(raised.center[2] > raisedArm.center[2], "a part marked closer sits in front of the body");
 
-  const sitting = layoutFrameScene(
+  // Two people of the same height: the one that looks smaller is farther away, and still covers itself on the frame.
+  const standing = (top: number, bottom: number, x: number): FramePart[] => {
+    const at = (share: number) => top + (bottom - top) * share;
+    return [
+      { name: "head", a: [at(0.13), x], b: [at(0), x], w: 0.8, d: 1, z: 0 },
+      { name: "torso", a: [at(0.15), x], b: [at(0.45), x], w: 0.6, d: 0.6, z: 0 },
+      { name: "thigh", a: [at(0.5), x], b: [at(0.745), x], w: 0.4, d: 1, z: 0 },
+      { name: "shin", a: [at(0.745), x], b: [at(1), x], w: 0.3, d: 1, z: 0 },
+    ];
+  };
+  const pairParts = [standing(100, 900, 300), standing(400, 700, 700)];
+  const pair = layoutFrameScene(
     {
-      parts: [
-        { name: "torso", a: [400, 500], b: [700, 500], w: 0.5, d: 0.6, z: 0 },
-        { name: "legs", a: [700, 500], b: [1000, 520], w: 0.4, d: 1, z: 0 },
-      ],
-      props: [
-        { name: "the room", box: [0, 0, 1000, 1000], d: 1, z: -1 },
-        { name: "pole", box: [0, 300, 1000, 330], d: 1, z: 0 },
-        { name: "bag", box: [800, 600, 950, 700], d: 0.6, z: 1 },
-        { name: "wall", a: [500, 0], b: [500, 1000], w: 0.6, d: 0.2, z: -1 },
-        { name: "board", a: [450, 380], b: [700, 560], w: 0.25, d: 0.15, z: 1 },
+      subjects: [
+        { name: "near", kind: "person", m: 1.7, parts: pairParts[0]! },
+        { name: "far", kind: "person", m: 1.7, parts: pairParts[1]! },
       ],
     },
     wide,
   );
-  assert.equal(sitting.cropped, true, "a subject cut off at the bottom of the frame has no floor");
-  assert.deepEqual(
-    sitting.boxes.filter((box) => box.kind === "prop").map((box) => box.name),
-    ["bag", "board"],
-    "the background, a tall pole and a wall across the frame are dropped",
+  const nearHead = pair.boxes.find((box) => box.name === "near · head")!;
+  const farHead = pair.boxes.find((box) => box.name === "far · head")!;
+  assert.ok(Math.abs(nearHead.center[2]) < 1e-9 && farHead.center[2] < -1, `the far one stands back: ${farHead.center[2]}`);
+  const frontAlong = (box: (typeof pair.boxes)[number]) => (pair.camera!.distance - frontOf(box)[2]) / pair.camera!.distance;
+  assert.ok(
+    Math.abs(farHead.size[1] / nearHead.size[1] - ((0.3 / 0.8) * frontAlong(farHead)) / frontAlong(nearHead)) < 1e-9,
+    "pushed back, the far one is scaled up to keep its outline",
   );
-  const board = sitting.boxes.find((box) => box.name === "board")!;
-  assert.ok(Math.abs(board.rotation ?? 0) > 0.3, "a board held at a slant stays slanted");
-  assert.ok(board.center[2] > 0, "a board held in front sits in front");
+  assert.ok(pair.plate && pair.plate.center[2] > farHead.center[2], "the far one stands behind the frame's plane");
+  const pairLook = (point: readonly number[]) => {
+    const depth = pair.camera!.distance - (point[2]! - pair.camera!.target[2]);
+    return [(point[0]! - pair.camera!.target[0]) / depth, (point[1]! - pair.camera!.target[1]) / depth] as const;
+  };
+  const farPart = pairParts[1]![0]!;
+  const farOnPlate: [number, number, number] = [
+    pair.plate.center[0] + ((farPart.a[1] + farPart.b[1]) / 2000 - 0.5) * pair.plate.size[0],
+    pair.plate.center[1] + (0.5 - (farPart.a[0] + farPart.b[0]) / 2000) * pair.plate.size[1],
+    pair.plate.center[2],
+  ];
+  assert.ok(Math.abs(pairLook(frontOf(farHead))[0] - pairLook(farOnPlate)[0]) < 1e-9, "the far head lines up with the frame");
+  assert.ok(Math.abs(pairLook(frontOf(farHead))[1] - pairLook(farOnPlate)[1]) < 1e-9);
 
-  // Props standing on the floor get their depth from where their bottom meets it, whatever side the model gave.
+  // A car: its body drawn level, round wheels, and the two wheels hidden behind it.
+  const car = layoutFrameScene(
+    {
+      subjects: [
+        {
+          name: "car",
+          kind: "vehicle",
+          m: 1.45,
+          parts: [
+            { name: "lower body", a: [640, 100], b: [600, 900], w: 0.3, d: 1.6, z: 0 },
+            { name: "cabin", a: [480, 300], b: [470, 750], w: 0.3, d: 1.4, z: 0 },
+            { name: "front wheel", a: [800, 220], b: [620, 220], w: 0.6, d: 1, z: 1 },
+            { name: "back wheel", a: [790, 780], b: [610, 780], w: 0.2, d: 1, z: 1 },
+          ],
+        },
+      ],
+    },
+    wide,
+  );
+  const wheels = car.boxes.filter((box) => box.wheel);
+  assert.deepEqual(
+    wheels.map((box) => box.name),
+    ["front wheel", "back wheel", "far front wheel", "far back wheel"],
+    "a car seen from one side gets the two wheels hidden behind it",
+  );
+  assert.equal(wheels[0]!.wheel, "z");
+  assert.ok(Math.abs(wheels[0]!.size[0] / wheels[0]!.size[1] - 0.6) < 1e-9, "a wheel seen at an angle is an oval as wide as it looks");
+  assert.equal(wheels[1]!.wheel, "x", "a wheel seen edge on shows its tread");
+  assert.ok(wheels[2]!.center[2] < wheels[0]!.center[2], "a hidden wheel is on the far side");
+  const carBody = car.boxes.find((box) => box.name === "lower body")!;
+  assert.ok(Math.abs(Math.abs(carBody.rotation ?? 0) - Math.PI / 2) < 1e-9, "a car body a few degrees off level is drawn level");
+  const bike = layoutFrameScene(
+    {
+      subjects: [
+        {
+          name: "bike",
+          kind: "vehicle",
+          parts: [
+            { name: "frame", a: [500, 300], b: [700, 600], w: 0.4, d: 0.2, z: 0 },
+            { name: "front wheel", a: [900, 250], b: [600, 250], w: 1, d: 0.15, z: 1 },
+            { name: "back wheel", a: [900, 650], b: [600, 650], w: 1, d: 0.15, z: -1 },
+          ],
+        },
+      ],
+    },
+    wide,
+  );
+  assert.equal(bike.boxes.filter((box) => box.wheel).length, 2, "a bike keeps its two wheels");
+
+  // A person's slant is kept, something as big as the frame is the background, and one block alone is exact.
+  const torsoPart: FramePart = { name: "torso", a: [300, 500], b: [600, 500], w: 0.5, d: 0.6, z: 0 };
+  const arm = layoutFrameScene(
+    { subjects: [{ name: "a", kind: "person", parts: [torsoPart, { name: "arm", a: [320, 520], b: [345, 700], w: 0.3, d: 1, z: 0 }] }] },
+    wide,
+  );
+  const armBox = arm.boxes.find((box) => box.name === "arm")!;
+  assert.ok(Math.abs(Math.abs(armBox.rotation ?? 0) - Math.PI / 2) > 0.05, "a person's arm keeps its slant");
   const room = layoutFrameScene(
     {
-      parts: mockScene.parts,
-      props: [
-        { name: "near stool", a: [960, 300], b: [760, 300], w: 0.5, d: 1, z: -1 },
-        { name: "far table", a: [840, 700], b: [700, 700], w: 0.8, d: 1, z: 1 },
-        { name: "guitar", a: [300, 620], b: [520, 420], w: 0.35, d: 0.3, z: 1 },
+      subjects: [
+        { name: "a", kind: "person", parts: [torsoPart] },
+        { name: "wall", kind: "object", parts: [{ name: "wall", a: [500, 0], b: [500, 1000], w: 0.9, d: 0.2, z: 0 }] },
       ],
     },
     wide,
   );
-  const leaning = layoutFrameScene({ parts: mockScene.parts, props: [{ name: "chair", a: [900, 640], b: [700, 655], w: 0.5, d: 1, z: 0 }] }, wide);
-  assert.equal(leaning.boxes.find((box) => box.name === "chair")?.rotation, 0, "a chair marked a few degrees off plumb stands straight");
-  const bottomOf = (box: (typeof room.boxes)[number]) => box.center[1] - extent(box).halfY;
-  const nearStool = room.boxes.find((box) => box.name === "near stool")!;
-  const farTable = room.boxes.find((box) => box.name === "far table")!;
-  const guitar = room.boxes.find((box) => box.name === "guitar")!;
-  assert.ok(Math.abs(bottomOf(nearStool) - room.floorY) < 1e-9, "a stool lower in the frame stands on the floor");
-  assert.ok(Math.abs(bottomOf(farTable) - room.floorY) < 1e-9, "a table higher in the frame stands on the floor");
-  assert.ok(nearStool.center[2] + nearStool.size[2] / 2 > 0, "lower in the frame is closer to the camera");
-  assert.ok(farTable.center[2] + farTable.size[2] / 2 < 0, "higher in the frame is farther away");
-  assert.ok(guitar.center[2] > 0 && bottomOf(guitar) > room.floorY + 0.3, "a held guitar keeps its side and stays off the floor");
-  const stoolFront: [number, number, number] = [nearStool.center[0], nearStool.center[1], nearStool.center[2] + nearStool.size[2] / 2];
-  const [stoolX, stoolY] = look(stoolFront);
-  const [stoolPlateX, stoolPlateY] = look(onPlate(860, 300));
-  assert.ok(Math.abs(stoolX! - stoolPlateX!) < 1e-9 && Math.abs(stoolY! - stoolPlateY!) < 1e-9, "the stool's front face lines up with the frame");
-  assert.throws(() => layoutFrameScene({ parts: [], props: [] }, wide), /did not mark any parts/);
+  assert.deepEqual(room.boxes.map((box) => box.name), ["torso"], "something as big as the frame is the background");
+  const lone = layoutFrameScene(
+    { subjects: [{ name: "crate", kind: "object", parts: [{ name: "crate", a: [700, 400], b: [700, 600], w: 0.5, d: 1, z: 0 }] }] },
+    wide,
+  );
+  const loneBox = lone.boxes[0]!;
+  assert.ok(Math.abs(loneBox.size[1] / loneBox.size[0] - 2) < 1e-9, "one block alone is drawn exactly over what it covers");
+  assert.ok(Math.abs(Math.abs(loneBox.rotation ?? 0) - Math.PI / 2) < 1e-9, "a level crate lies on its side");
+  assert.throws(() => layoutFrameScene({ subjects: [] }, wide), /did not mark any parts/);
 
   const boxMesh = partBoxesMesh(laid);
   assert.equal(boxMesh.positions.length, laid.boxes.length * 8 * 3);
   assert.equal(boxMesh.indices.length, laid.boxes.length * 36);
-  const levelMesh = partBoxesMesh(level);
-  const xs = Array.from({ length: 8 }, (_, index) => levelMesh.positions[index * 3]!);
-  const levelBox = level.boxes[0]!;
-  assert.ok(Math.abs(Math.max(...xs) - Math.min(...xs) - levelBox.size[1]) < 1e-5, "the mesh turns the box with the limb");
+  const loneMesh = partBoxesMesh(lone);
+  const xs = Array.from({ length: 8 }, (_, index) => loneMesh.positions[index * 3]!);
+  assert.ok(Math.abs(Math.max(...xs) - Math.min(...xs) - loneBox.size[1]) < 1e-5, "the mesh turns the box with the part");
   assert.equal(parseSubjectChoice("frame: 4\nsubject: the armored figure", 12).frame, 3);
   assert.equal(parseSubjectChoice("frame: 4\nsubject: the armored figure", 12).subject, "the armored figure");
   assert.equal(parseSubjectChoice("Sure.\nframe: 2\nsubject: red mug\nThanks", 4).subject, "red mug");
@@ -661,6 +852,13 @@ async function main() {
   })
     .png()
     .toBuffer();
+  if (!REVERSE_3D_RENDERS_VIDEO) {
+    // While the video is switched off, a real run is refused before anything is uploaded. Mock runs stay open.
+    delete process.env.COMFY_MOCK;
+    const off = await postReverse(clip4, null);
+    assert.equal(off.status, 503, JSON.stringify(off.payload));
+    assert.match(off.payload.error?.message ?? "", /switched off/);
+  }
   process.env.COMFY_MOCK = "1";
 
   // The video job runs in parallel with the 3D subject, so it needs no scene image.
@@ -701,15 +899,58 @@ async function main() {
     error?: { message?: string };
   };
   assert.equal(subjectResponse.status, 200, JSON.stringify(subjectBody.error));
-  assert.equal(subjectBody.subject, "The main subject");
+  assert.equal(subjectBody.subject, "person waving");
   assert.equal(subjectBody.time, 0.4);
   assert.equal(subjectBody.pick?.["20"]?.class_type, "GeminiNodeV3");
   assert.equal(typeof subjectBody.reply, "string", "the mock answers with a sample reply, read like a model's");
-  const mockReply = parseSubjectScene(subjectBody.reply ?? "", 2);
-  assert.ok(mockReply.parts.length >= 5);
-  assert.ok(mockReply.parts.some((part) => part.name === "head"));
+  assert.equal(parseSceneFind(subjectBody.reply ?? "", 2).subjects.length, 3);
   assert.equal(subjectBody.positions, undefined, "the toy is the blocks, not a mesh");
   assert.equal(subjectBody.mock, true);
+
+  // The second job: the chosen frame, a close-up per subject, their kinds and where each sits in its close-up.
+  const markForm = new FormData();
+  markForm.set("step", "mark");
+  markForm.append("frame", new File([new Uint8Array(png)], "frame.jpg", { type: "image/jpeg" }));
+  for (let index = 0; index < 3; index += 1) {
+    markForm.append("crop", new File([new Uint8Array(png)], `subject_${index + 1}.jpg`, { type: "image/jpeg" }));
+  }
+  markForm.set("kinds", "person,person,object");
+  markForm.set("boxes", "115,267,896,731,120,300,880,700,145,110,855,890");
+  const postMark = async (form: FormData) => {
+    const response = await postSubject(new Request("http://localhost/api/reverse-3d/subject", { method: "POST", body: form }));
+    const body = (await response.json()) as {
+      mock?: boolean;
+      step?: string;
+      reply?: string;
+      mark?: Record<string, { class_type?: string; inputs?: Record<string, unknown> }>;
+      error?: { message?: string };
+    };
+    return { status: response.status, body };
+  };
+  const marked = await postMark(markForm);
+  assert.equal(marked.status, 200, JSON.stringify(marked.body.error));
+  assert.equal(marked.body.step, "mark");
+  assert.equal(marked.body.mock, true);
+  assert.equal(marked.body.mark?.["4"]?.inputs?.image, "subject_3.png");
+  assert.match(String(marked.body.mark?.["20"]?.inputs?.["model.prompt"]), /Image 4 shows an object inside the box \[145, 110, 855, 890\]/);
+  assert.equal(parseSceneMarks(marked.body.reply ?? "", 3).filter(Boolean).length, 3);
+  const refused = async (edit: (form: FormData) => void, pattern: RegExp) => {
+    const form = new FormData();
+    for (const [key, value] of markForm) form.append(key, value);
+    edit(form);
+    const result = await postMark(form);
+    assert.equal(result.status, 400, JSON.stringify(result.body));
+    assert.match(result.body.error?.message ?? "", pattern);
+  };
+  await refused((form) => form.set("kinds", "person,robot,object"), /needs its kind/);
+  await refused((form) => form.set("kinds", "person,person"), /needs its kind/);
+  await refused((form) => form.set("boxes", "115,267,896,731,120,300,880,700,145,110,855"), /needs its box/);
+  await refused((form) => form.set("boxes", "115,267,896,731,120,300,880,700,145,110,855,1200"), /needs its box/);
+  await refused((form) => {
+    for (let index = 0; index < 6; index += 1) form.append("crop", new File([new Uint8Array(png)], "more.jpg", { type: "image/jpeg" }));
+  }, /1 to 8 close-ups/);
+  await refused((form) => form.delete("frame"), /Upload a frame/);
+  await refused((form) => form.append("frame", new File([new Uint8Array(png)], "frame_2.jpg", { type: "image/jpeg" })), /chosen frame once/);
 
   const cutoutForm = new FormData();
   cutoutForm.set("step", "cutout");

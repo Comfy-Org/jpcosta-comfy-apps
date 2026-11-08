@@ -3,6 +3,7 @@ import { buildCatalog, buildPublicCatalog } from "../src/lib/catalog";
 import { getApp, listAppIds } from "../src/lib/config";
 import { saveMockJob } from "../src/lib/mock";
 import { decidePublicRequest, isPublicApp } from "../src/lib/public-surface";
+import { REVERSE_3D_RENDERS_VIDEO } from "../src/lib/reverse-3d-switch";
 import { signAssetId } from "../src/lib/signing";
 
 const jobUuid = "11111111-1111-4111-8111-111111111111";
@@ -62,7 +63,8 @@ assert.equal(disabledRun.status, 404);
 const publicRun = await runRoute.POST(new Request("http://localhost/api/run/reverse-3d", { method: "POST" }), {
   params: Promise.resolve({ app: "reverse-3d" }),
 });
-assert.equal(publicRun.status, 400);
+// While the video is switched off, a real run is refused before the form is read.
+assert.equal(publicRun.status, REVERSE_3D_RENDERS_VIDEO ? 400 : 503);
 
 const jobsRoute = await import("../src/app/api/jobs/[id]/route");
 const deniedJob = await jobsRoute.GET(new Request(`http://localhost/api/jobs/pumpkin-carve~${jobUuid}`), {

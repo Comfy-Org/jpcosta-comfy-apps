@@ -12,6 +12,7 @@ import { saveMockJob } from "@/lib/mock";
 import { parseRunParams } from "@/lib/params";
 import { applyKlingFrame, readVideoPixelSize } from "@/lib/kling-frame";
 import { isPublicApp } from "@/lib/public-surface";
+import { REVERSE_3D_RENDERS_VIDEO } from "@/lib/reverse-3d-switch";
 import { durationOverCap, readContainerDurationSeconds } from "@/lib/video-duration";
 import { buildJobBody, filePathFor, redactJobBody, type UploadedAsset } from "@/lib/workflow";
 
@@ -33,6 +34,10 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
     if (!isPublicApp(appId)) throw new AppError(404, "not_found", "Unknown app.");
     const app = getApp(appId);
     if (!app) throw new AppError(404, "not_found", "Unknown app.");
+    // Mock runs never reach Comfy, so they stay open for local testing.
+    if (appId === "reverse-3d" && !REVERSE_3D_RENDERS_VIDEO && !isMockMode()) {
+      throw new AppError(503, "video_off", "The Reverse 3D video is switched off while the 3D blockout is tested.");
+    }
 
     let form: FormData;
     try {

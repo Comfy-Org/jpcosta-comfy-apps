@@ -6,7 +6,8 @@ import { downloadBlob, exportCutout } from "@/lib/composite";
 import { FORM_BUDGET_BYTES, VIDEO_FORM_BUDGET_BYTES, imageRejectReason, packImages, randomSeed, shrinkForUpload, videoRejectReason, videoTypeRejectReason } from "@/lib/prepare-image";
 import { clientFailureMessage, fetchBlobRetrying, type ClientStep } from "@/lib/client-fetch";
 import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
-import { grabFrame, requestSubjectModel, sampleSceneFrames, type SceneModel } from "@/lib/scene-client";
+import { requestSubjectModel, sampleSceneFrames, type SceneModel } from "@/lib/scene-client";
+import { REVERSE_3D_RENDERS_VIDEO } from "@/lib/reverse-3d-switch";
 import { SCENE_POLYGON_DEFAULT } from "@/lib/scene-mesh";
 import { BlockBuild } from "@/components/block-build";
 import { LILAC, TERMINAL_STATUSES, type CatalogApp, type CatalogImage, type JobView, type RunResponse, type TextControl } from "@/lib/types";
@@ -63,8 +64,11 @@ type Recovery = {
   sig?: string;
 };
 
-/** Longest the video job waits for the 3D toy's job to be queued ahead of it. */
-const TOY_HEAD_START_MS = 20_000;
+/**
+ * Longest the video job waits for the 3D toy's jobs to be queued ahead of it.
+ * The toy runs two short jobs, the second one after the first has finished, so this covers both.
+ */
+const TOY_HEAD_START_MS = 45_000;
 
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
@@ -108,6 +112,8 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
   const [recovery, setRecovery] = useState<Recovery | null>(null);
   const [scene, setScene] = useState<SceneModel | null>(null);
   const [sceneState, setSceneState] = useState<"idle" | "building" | "ready" | "error">("idle");
+  /** How far the 3D toy's build is, 0 to 1, while the video is switched off and the toy is all there is. */
+  const [sceneProgress, setSceneProgress] = useState(0);
   const [polygonCount, setPolygonCount] = useState(0);
   /** Steps layout: a step the person went back to, over the one the state implies. */
   const [pick, setPick] = useState<Step | null>(null);
@@ -250,6 +256,7 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
           setScene(null);
           setPolygonCount(0);
           setSceneState("building");
+          setSceneProgress(0.04);
           setToyQueued(false);
           setNeed("Checking the clip…");
           try {
@@ -270,25 +277,26 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
                 },
               };
             });
-            setNeed("Asking which frame shows the subject…");
+            setNeed("Finding everyone in the shot…");
             const sampled = await sampleSceneFrames(prepared.file, prepared.duration);
             if (token !== sceneToken.current) return;
             const picked = await requestSubjectModel(
+              prepared.file,
               sampled.frames,
               sampled.times,
               sampled.aspect,
-              (message) => {
-                if (token === sceneToken.current) setNeed(message);
+              (message, share) => {
+                if (token !== sceneToken.current) return;
+                setNeed(message);
+                setSceneProgress(share);
               },
               () => {
                 if (token === sceneToken.current) setToyQueued(true);
               },
             );
             if (token !== sceneToken.current) return;
-            // The chosen frame hangs behind the blocks, grabbed again at full size so it stays sharp.
-            const plate = await grabFrame(prepared.file, picked.time).catch(() => sampled.frames[picked.frame] ?? null);
-            if (token !== sceneToken.current) return;
-            setScene({ ...picked, plate });
+            setScene(picked);
+            setSceneProgress(1);
             setSceneState("ready");
             setNeed(
               prepared.trimmed
@@ -766,6 +774,8 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
   }, [layout, uploads.video, toyQueued]);
 
   useEffect(() => {
+    // While the video is switched off, the clip only builds the 3D blockout.
+    if (!REVERSE_3D_RENDERS_VIDEO && app.kind === "reverse-3d") return;
     if (layout !== "steps" || !autoRun.current || !uploads.video || !toyQueued || busy) return;
     autoRun.current = false;
     void run();
@@ -807,7 +817,9 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
     const step: Step = busy ? 2 : (pick ?? implied);
     const replay = step === 2 && Boolean(active) && shownId === active?.id && !busy;
     const failed = phase === "error" && Boolean(error);
-    const unreadable = sceneState === "error" && !video;
+    // While the video is switched off, the 3D blockout is the whole result, so its failure is the run's failure.
+    const videoOff = !REVERSE_3D_RENDERS_VIDEO;
+    const unreadable = sceneState === "error" && (!video || videoOff);
     const takeVideo = (file: File) => {
       setPick(null);
       setActiveId(null);
@@ -825,7 +837,24 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
       downloadBlob(active.compareBlob, filename);
       setToast(filename);
     };
-    const headline = replay
+    const blockoutHeadline = unreadable
+      ? video
+        ? "Could not build the 3D blockout"
+        : "Could not read that shot"
+      : !video
+        ? "Checking the clip…"
+        : parts && !building
+          ? "3D blockout ready"
+          : "Building the 3D blockout…";
+    const blockoutLine =
+      unreadable || building || !parts
+        ? need
+        : scene?.rough
+          ? `Found ${scene.found ?? "everyone"}, but could not mark their poses this time, so each one is a single block.`
+          : `Built ${scene?.found ?? "the shot"}. Drag to spin it, click a block.`;
+    const headline = videoOff
+      ? blockoutHeadline
+      : replay
       ? "Built again, just for fun"
       : failed
         ? "The render did not work"
@@ -838,7 +867,9 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
               : active
                 ? "Done!"
                 : "Rendering · queued";
-    const toyLine = failed
+    const toyLine = videoOff
+      ? blockoutLine
+      : failed
       ? error
       : unreadable
         ? need
@@ -851,7 +882,7 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
               : sceneState === "error"
                 ? "No 3D blockout this time, the video is still rendering."
                 : null;
-    const loaderBar = active ? 1 : bar;
+    const loaderBar = videoOff ? sceneProgress : active ? 1 : bar;
     return (
       <article className="card r3d" data-step={step}>
         <StepNav
@@ -901,6 +932,12 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
                         {recovery?.kind === "download" ? "Retry download" : recovery ? "Check job" : "Try again"}
                       </button>
                     ) : null}
+                    <PickButton className="btn" onFile={takeVideo}>
+                      Another video
+                    </PickButton>
+                  </div>
+                ) : videoOff && parts && !building ? (
+                  <div className="r3d-status-actions">
                     <PickButton className="btn" onFile={takeVideo}>
                       Another video
                     </PickButton>
