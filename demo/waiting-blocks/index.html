@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pt">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gerando vídeo</title>
+    <style>
+      :root { color: #241c22; background: #f6f3ee; font-family: Inter, ui-sans-serif, sans-serif; }
+      body { margin: 0; }
+      header, .row, .note { padding: 14px 18px 0; max-width: 1100px; }
+      .badge { display: inline-block; font-size: 12px; border: 1px solid #ddd6cc; border-radius: 999px; padding: 3px 8px; color: #6d645c; }
+      h1 { font-size: 15px; font-weight: 500; margin: 10px 0 0; display: flex; align-items: center; gap: 8px; }
+      h1 .dot { width: 8px; height: 8px; border-radius: 50%; background: #8d837a; animation: pulse 1.8s ease-in-out infinite; }
+      h1[data-job="ready"] .dot { animation: none; background: #2f6f4e; }
+      @keyframes pulse { 50% { opacity: 0.35; } }
+      p { margin: 8px 0 0; font-size: 13px; line-height: 1.45; max-width: 68ch; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-bottom: 12px; }
+      button { font: inherit; border: 1px solid #d5cec4; background: #fff; border-radius: 8px; padding: 6px 10px; }
+      button.test { border-style: dashed; color: #6d645c; }
+      button[hidden], video[hidden] { display: none; }
+      .stage { padding: 0 18px; max-width: 1100px; }
+      canvas { width: 100%; aspect-ratio: 16 / 9; height: auto; display: block; border-radius: 10px; background: #17171b; touch-action: none; cursor: grab; }
+      .note { font-size: 12px; color: #6d645c; padding-bottom: 8px; }
+      .test-note { font-size: 12px; color: #6d645c; }
+      video { width: min(100% - 36px, 1064px); margin: 8px 18px 18px; border-radius: 10px; background: #000; display: block; }
+      @media (max-width: 640px) {
+        header, .row, .note { padding-left: 12px; padding-right: 12px; }
+        .stage { padding-left: 12px; padding-right: 12px; }
+        video { width: calc(100% - 24px); margin-left: 12px; margin-right: 12px; }
+      }
+    </style>
+  </head>
+  <body data-job="pending" data-assembly="building" data-playing="0" data-instances="0">
+    <header>
+      <span class="badge">Demonstração — vídeo já gerado</span>
+      <h1 id="status" data-job="pending"><span class="dot"></span><span id="status-label">Gerando vídeo</span></h1>
+      <p>Enquanto espera, a cena monta-se. Pode rodar e aproximar. Isso não muda o vídeo.</p>
+    </header>
+    <div class="stage">
+      <canvas id="view"></canvas>
+    </div>
+    <p class="note">Relevo de uma imagem. O verso não foi visto, por isso a rotação tem limite. A montagem a acabar não significa que o vídeo está pronto.</p>
+    <div class="row">
+      <button id="reset" type="button">Repor câmara</button>
+      <button id="restart" type="button">Recomeçar</button>
+      <button id="watch" type="button" hidden>Assistir vídeo</button>
+      <button id="simulate" class="test" type="button">Simular vídeo pronto</button>
+      <span class="test-note">Controlo de teste, separado da montagem.</span>
+    </div>
+    <video id="film" controls playsinline preload="none" hidden></video>
+    <script type="importmap">
+      { "imports": { "three": "../block-glb-viewer/vendor/three.module.js" } }
+    </script>
+    <script type="module" src="./viewer.js"></script>
+  </body>
+</html>
