@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Block scene GLB viewer</title>
+    <style>
+      :root { color: #211927; background: #f4f1ea; font-family: Inter, ui-sans-serif, sans-serif; }
+      body { margin: 0; }
+      header { padding: 14px 18px 0; max-width: 1100px; }
+      h1 { font-size: 18px; margin: 0 0 6px; font-weight: 600; }
+      p { margin: 0; font-size: 13px; line-height: 1.45; max-width: 78ch; }
+      .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 18px; font-size: 13px; }
+      canvas { width: min(1100px, calc(100% - 36px)); height: 640px; display: block; margin: 0 18px 18px; border-radius: 8px; background: #2a2a2e; }
+      #stats { font-variant-numeric: tabular-nums; }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./vendor/three.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <header>
+      <h1>Generated block-scene GLB</h1>
+      <p>
+        Isolated viewer. It draws the file's own triangles with a plain gray material.
+        It does not voxelize, fill columns, or invent a mesh. Orbit the volume that is actually in the GLB.
+      </p>
+    </header>
+    <div class="row">
+      <label>GLB <input id="file" type="file" accept=".glb,.gltf,model/gltf-binary" /></label>
+      <button id="front" type="button">Front</button>
+      <span id="status">Waiting for the Hunyuan GLB. No geometry is invented.</span>
+      <span id="stats"></span>
+    </div>
+    <canvas id="view"></canvas>
+    <script type="module" src="./viewer.js"></script>
+  </body>
+</html>
