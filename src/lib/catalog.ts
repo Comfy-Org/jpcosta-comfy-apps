@@ -163,7 +163,7 @@ const CHROME: Record<
         key: "video",
         label: "Final video",
         accept: "video",
-        hint: `MP4, MOV, or WebM, 3 to ${REVERSE_3D_MAX_SECONDS} seconds. Longer clips use the first ${REVERSE_3D_MAX_SECONDS} seconds. Clips over 4 MB are resampled to 24 fps in the browser.`,
+        hint: `MP4, MOV, or WebM, at least 3 seconds. Longer clips use the first ${REVERSE_3D_MAX_SECONDS} seconds. Clips over 4 MB are resampled to 24 fps in the browser.`,
       },
     ],
   },

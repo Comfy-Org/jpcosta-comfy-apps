@@ -183,8 +183,9 @@ export async function prepareReverse3dUpload(file: File): Promise<{
   const trimmed = accepted.trimmed;
   const duration = accepted.duration;
   const needsScale = probe.width < REVERSE_3D_MIN_WIDTH;
-  const fits = file.size <= REVERSE_3D_UPLOAD_TARGET_BYTES && !needsScale && !trimmed;
-  if (fits) return { file, width: probe.width, height: probe.height, duration, trimmed: false };
+  // A small clip goes up as is, whatever its length: the workflow keeps the first seconds itself.
+  const fits = file.size <= REVERSE_3D_UPLOAD_TARGET_BYTES && !needsScale;
+  if (fits) return { file, width: probe.width, height: probe.height, duration, trimmed };
 
   const scale = Math.max(REVERSE_3D_MIN_WIDTH / probe.width, 1);
   const width = even(probe.width * scale);

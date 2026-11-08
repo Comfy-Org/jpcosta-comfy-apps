@@ -196,8 +196,8 @@ assert.equal(getApp("reverse-3d")?.partnerNodes, true);
 assert.equal(getApp("reverse-3d")?.output.node, "21");
 assert.equal(getApp("reverse-3d")?.output.media, "video");
 assert.equal(getApp("reverse-3d")?.videoInputs?.video.node, "10");
-assert.equal(getApp("reverse-3d")?.videoInputs?.video.maxSeconds, 10);
-assert.equal(getApp("reverse-3d")?.imageInputs.scene?.node, "12");
+assert.equal(getApp("reverse-3d")?.videoInputs?.video.maxSeconds, undefined);
+assert.equal(getApp("reverse-3d")?.imageInputs.scene, undefined);
 assert.equal(REVERSE_3D_MAX_SECONDS, 10);
 assert.match(reverseCatalog?.images[0]?.hint ?? "", /10 seconds/);
 assert.doesNotMatch(reverseCatalog?.images[0]?.hint ?? "", /18 seconds/);
@@ -574,23 +574,22 @@ assert.deepEqual(reverseJob.workflow["10"].inputs.file, {
   __type: "core/ASSET",
   info: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", file_path: "input.mp4" },
 });
+assert.equal(reverseJob.workflow["11"].class_type, "Video Slice");
+assert.deepEqual(reverseJob.workflow["11"].inputs.video, ["10", 0]);
+assert.equal(reverseJob.workflow["11"].inputs.duration, 10);
 assert.equal(reverseJob.workflow["15"].class_type, "GetVideoComponents");
-assert.deepEqual(reverseJob.workflow["15"].inputs.video, ["10", 0]);
+assert.deepEqual(reverseJob.workflow["15"].inputs.video, ["11", 0]);
 assert.equal(reverseJob.workflow["17"].class_type, "ResizeAndPadImage");
 assert.deepEqual(reverseJob.workflow["17"].inputs.image, ["15", 0]);
 assert.equal(reverseJob.workflow["16"].class_type, "CreateVideo");
 assert.equal(reverseJob.workflow["16"].inputs.fps, 24);
 assert.deepEqual(reverseJob.workflow["16"].inputs.images, ["17", 0]);
 assert.deepEqual(reverseJob.workflow["16"].inputs.audio, ["15", 1]);
-assert.equal(reverseJob.workflow["12"].class_type, "LoadImage");
-assert.deepEqual(reverseJob.workflow["12"].inputs.image, {
-  __type: "core/ASSET",
-  info: { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", file_path: "scene.png" },
-});
+assert.equal(reverseJob.workflow["12"], undefined);
 assert.equal(reverseJob.workflow["20"].class_type, "Kling4EditVideoNode");
 assert.deepEqual(reverseJob.workflow["20"].inputs["model.video_1"], ["16", 0]);
-assert.deepEqual(reverseJob.workflow["20"].inputs["model.reference_images.image_1"], ["12", 0]);
-assert.match(String(reverseJob.workflow["20"].inputs["model.prompt"]), /@Image1/);
+assert.equal(reverseJob.workflow["20"].inputs["model.reference_images.image_1"], undefined);
+assert.doesNotMatch(String(reverseJob.workflow["20"].inputs["model.prompt"]), /@Image1/);
 assert.equal(reverseJob.workflow["20"].inputs["model.seed"], 42);
 assert.equal(reverseJob.workflow["21"].class_type, "SaveVideo");
 assert.equal(reverseJob.extra_data?.api_key_comfy_org, "team-key");

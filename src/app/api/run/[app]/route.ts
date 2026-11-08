@@ -56,9 +56,6 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
       }
       if (entries.length === 0) {
         if (spec.optional) continue;
-        if (appId === "reverse-3d" && role === "scene") {
-          throw new AppError(400, "invalid_input", "The 3D scene reference is missing.");
-        }
         if (appId === "paparazzi-me" && role === "scene") continue;
         if (appId === "paparazzi-me" && role === "user") {
           throw new AppError(400, "invalid_input", "Upload your face.");

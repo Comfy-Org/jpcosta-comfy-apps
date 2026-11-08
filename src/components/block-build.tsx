@@ -1,57 +1,50 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { BoxCells } from "@/lib/scene-mesh";
+import type { PartBoxes } from "@/lib/scene-mesh";
 
 type Props = {
-  /** The subject as boxes. Null while the 3D model is still being made. */
-  cells: BoxCells | null;
-  /** Job progress, 0 to 1. Blocks keep arriving even when this stalls. */
-  progress: number;
-  /** The video is ready: place the remaining blocks, then call onFinished. */
+  /** The subject as a few big blocks. Null while the 3D model is still being made. */
+  parts: PartBoxes | null;
+  /** The video is ready: once every block has landed, call onFinished. */
   done: boolean;
   onFinished?: () => void;
 };
 
 type Live = {
-  setCells: (cells: BoxCells | null) => void;
-  setProgress: (progress: number, done: boolean) => void;
+  setParts: (parts: PartBoxes | null) => void;
+  setDone: (done: boolean) => void;
   dispose: () => void;
 };
 
 const CLAY = 0xc9cbd1;
 const HOT = 0xf2ff59;
-const DROP_MS = 420;
-
-/** Where blocks are in time: a slow curve so the build never sits still, sped up by real progress. */
-function buildShare(elapsed: number, progress: number, done: boolean): number {
-  if (done) return 1;
-  const time = 0.9 * (1 - Math.exp(-elapsed / 22000));
-  return Math.min(0.96, Math.max(time, progress * 0.96));
-}
+/** Time between two blocks landing. */
+const GAP_MS = 650;
+const DROP_MS = 560;
 
 const easeOutBack = (t: number) => {
-  const c = 1.9;
+  const c = 1.7;
   return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2);
 };
 
 /**
- * The loading screen: the subject's blocks land one by one, bottom up, while the video is made.
- * Drag to orbit, hover a block to lift it, click to knock it.
+ * The loading screen: while the video renders, the subject is assembled from big blocks
+ * (body, head, arms…) dropping in one by one. Drag to orbit, hover a block to lift it, click to knock it.
  */
-export function BlockBuild({ cells, progress, done, onFinished }: Props) {
+export function BlockBuild({ parts, done, onFinished }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const liveRef = useRef<Live | null>(null);
   const finishedRef = useRef(onFinished);
+  const latest = useRef({ parts, done });
   useEffect(() => {
     finishedRef.current = onFinished;
   });
-  const latest = useRef({ cells, progress, done });
   useEffect(() => {
-    latest.current = { cells, progress, done };
-    liveRef.current?.setCells(cells);
-    liveRef.current?.setProgress(progress, done);
-  }, [cells, progress, done]);
+    latest.current = { parts, done };
+    liveRef.current?.setParts(parts);
+    liveRef.current?.setDone(done);
+  }, [parts, done]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -80,7 +73,7 @@ export function BlockBuild({ cells, progress, done, onFinished }: Props) {
 
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(32, 1, 0.05, 50);
-      camera.position.set(2.6, 1.5, 3.4);
+      camera.position.set(2.6, 1.4, 3.4);
       const controls = new OrbitControls(camera, renderer.domElement);
       controls.enableDamping = true;
       controls.enablePan = false;
@@ -88,7 +81,7 @@ export function BlockBuild({ cells, progress, done, onFinished }: Props) {
       controls.maxDistance = 7;
       controls.maxPolarAngle = Math.PI * 0.52;
       controls.autoRotate = !reduce;
-      controls.autoRotateSpeed = 0.7;
+      controls.autoRotateSpeed = 0.6;
       controls.target.set(0, -0.05, 0);
 
       scene.add(new THREE.HemisphereLight(0xf4f1ff, 0x5a5f6e, 1.6));
@@ -118,71 +111,83 @@ export function BlockBuild({ cells, progress, done, onFinished }: Props) {
       floor.position.y = -0.8;
       scene.add(floor);
 
-      const material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82, metalness: 0 });
       // While the 3D model is still being made: a small grid of blocks breathing in a wave.
       const IDLE = 4;
       const idleSize = 0.2;
-      const idle = new THREE.InstancedMesh(new RoundedBoxGeometry(idleSize, idleSize, idleSize, 2, idleSize * 0.14), material, IDLE * IDLE);
+      const idleMat = new THREE.MeshStandardMaterial({ color: CLAY, roughness: 0.82 });
+      const idle = new THREE.InstancedMesh(new RoundedBoxGeometry(idleSize, idleSize, idleSize, 2, idleSize * 0.14), idleMat, IDLE * IDLE);
       idle.castShadow = true;
-      for (let index = 0; index < IDLE * IDLE; index += 1) idle.setColorAt(index, new THREE.Color(CLAY));
       scene.add(idle);
-      let mesh: InstanceType<typeof THREE.InstancedMesh> | null = null;
-      let current: BoxCells | null = null;
-      let order: number[] = [];
-      /** When each block (by draw slot) started to drop. */
-      let landedAt: Float64Array = new Float64Array(0);
-      let placed = 0;
-      let startedAt = performance.now();
-      let lift = new Float32Array(0);
-      let knock = new Float32Array(0);
-      let hovered = -1;
-      let share = 0;
+
+      type Block = {
+        mesh: InstanceType<typeof THREE.Mesh>;
+        material: InstanceType<typeof THREE.MeshStandardMaterial>;
+        home: InstanceType<typeof THREE.Vector3>;
+        height: number;
+        startAt: number;
+        lift: number;
+        knock: number;
+        spin: number;
+      };
+      const group = new THREE.Group();
+      scene.add(group);
+      let blocks: Block[] = [];
+      let current: PartBoxes | null = null;
       let isDone = false;
       let finishTimer = 0;
       let finished = false;
-      const dummy = new THREE.Object3D();
+      let hovered: Block | null = null;
       const clay = new THREE.Color(CLAY);
       const hot = new THREE.Color(HOT);
-      const mixed = new THREE.Color();
+      const dummy = new THREE.Object3D();
 
-      function setCells(next: BoxCells | null) {
-        if (next === current) return;
-        current = next;
-        if (mesh) {
-          scene.remove(mesh);
-          mesh.geometry.dispose();
-          mesh.dispose();
-          mesh = null;
+      function clearBlocks() {
+        for (const block of blocks) {
+          group.remove(block.mesh);
+          block.mesh.geometry.dispose();
+          block.material.dispose();
         }
-        placed = 0;
-        finished = false;
-        startedAt = performance.now();
-        if (!next) return;
-        const count = next.layers.length;
-        const geometry = new RoundedBoxGeometry(next.size, next.size, next.size, 2, next.size * 0.14);
-        mesh = new THREE.InstancedMesh(geometry, material, count);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        order = Array.from({ length: count }, (_, index) => index);
-        const jitter = order.map(() => Math.random());
-        order.sort((a, b) => next.layers[a] - next.layers[b] || jitter[a] - jitter[b]);
-        landedAt = new Float64Array(count).fill(-1);
-        lift = new Float32Array(count);
-        knock = new Float32Array(count);
-        dummy.scale.setScalar(0);
-        dummy.updateMatrix();
-        for (let index = 0; index < count; index += 1) {
-          mesh.setMatrixAt(index, dummy.matrix);
-          mesh.setColorAt(index, clay);
-        }
-        floor.position.y = next.floorY;
-        scene.add(mesh);
+        blocks = [];
+        hovered = null;
       }
 
-      function setProgress(nextProgress: number, nextDone: boolean) {
-        isDone = nextDone;
-        share = nextProgress;
+      function setParts(next: PartBoxes | null) {
+        if (next === current) return;
+        current = next;
+        clearBlocks();
+        finished = false;
+        if (!next) return;
+        const now = performance.now();
+        // Bottom up, and the bigger block first when two start at the same height.
+        const order = next.boxes
+          .map((box, index) => ({ box, index, bottom: box.center[1] - box.size[1] / 2, volume: box.size[0] * box.size[1] * box.size[2] }))
+          .sort((a, b) => a.bottom - b.bottom || b.volume - a.volume);
+        order.forEach(({ box }, slot) => {
+          const [w, h, d] = box.size;
+          const gap = Math.min(w, h, d) * 0.03;
+          const radius = Math.min(w, h, d) * 0.12;
+          const material = new THREE.MeshStandardMaterial({ color: CLAY, roughness: 0.8 });
+          const mesh = new THREE.Mesh(new RoundedBoxGeometry(w - gap, h - gap, d - gap, 3, radius), material);
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          mesh.visible = false;
+          group.add(mesh);
+          blocks.push({
+            mesh,
+            material,
+            home: new THREE.Vector3(box.center[0], box.center[1], box.center[2]),
+            height: h,
+            startAt: reduce ? now - DROP_MS : now + 250 + slot * GAP_MS,
+            lift: 0,
+            knock: 0,
+            spin: 0,
+          });
+        });
+        floor.position.y = next.floorY;
+      }
+
+      function setDone(next: boolean) {
+        isDone = next;
       }
 
       function resize() {
@@ -201,24 +206,26 @@ export function BlockBuild({ cells, progress, done, onFinished }: Props) {
       const pointer = new THREE.Vector2();
       let pointerIn = false;
       let downAt: { x: number; y: number } | null = null;
+      const canvas = renderer.domElement;
       const onMove = (event: PointerEvent) => {
-        const rect = renderer.domElement.getBoundingClientRect();
+        const rect = canvas.getBoundingClientRect();
         pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
         pointerIn = true;
       };
       const onLeave = () => {
         pointerIn = false;
-        hovered = -1;
+        hovered = null;
       };
       const onDown = (event: PointerEvent) => {
         downAt = { x: event.clientX, y: event.clientY };
       };
       const onUp = (event: PointerEvent) => {
-        if (!downAt || Math.hypot(event.clientX - downAt.x, event.clientY - downAt.y) > 4) return;
+        const start = downAt;
         downAt = null;
-        if (hovered >= 0) knock[hovered] = 1;
+        if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4 || !hovered) return;
+        hovered.knock = 1;
+        hovered.spin = Math.random() < 0.5 ? -1 : 1;
       };
-      const canvas = renderer.domElement;
       canvas.addEventListener("pointermove", onMove);
       canvas.addEventListener("pointerleave", onLeave);
       canvas.addEventListener("pointerdown", onDown);
@@ -231,6 +238,7 @@ export function BlockBuild({ cells, progress, done, onFinished }: Props) {
         const dt = Math.min(64, now - last);
         last = now;
         controls.update();
+
         idle.visible = !current;
         if (!current) {
           const gap = idleSize * 1.12;
@@ -239,71 +247,53 @@ export function BlockBuild({ cells, progress, done, onFinished }: Props) {
             const gz = Math.floor(index / IDLE) - (IDLE - 1) / 2;
             const wave = reduce ? 0 : Math.max(0, Math.sin(now / 260 - (gx + gz) * 0.9));
             dummy.position.set(gx * gap, floor.position.y + idleSize / 2 + wave * idleSize * 1.4, gz * gap);
-            dummy.rotation.set(0, 0, 0);
-            dummy.scale.setScalar(1);
             dummy.updateMatrix();
             idle.setMatrixAt(index, dummy.matrix);
           }
           idle.instanceMatrix.needsUpdate = true;
         }
-        if (mesh && current) {
-          const count = order.length;
-          const want = reduce ? (isDone ? count : Math.round(count * buildShare(now - startedAt, share, isDone))) : Math.round(count * buildShare(now - startedAt, share, isDone));
-          // Release blocks at a steady pace, faster when far behind.
-          const behind = want - placed;
-          if (behind > 0) {
-            const perFrame = reduce ? behind : Math.max(1, Math.ceil(behind * (isDone ? 0.16 : 0.05)));
-            for (let step = 0; step < perFrame && placed < count; step += 1) {
-              landedAt[order[placed]] = reduce ? now - DROP_MS : now + step * (dt / perFrame);
-              placed += 1;
-            }
-          }
-          if (pointerIn && placed > 0) {
-            raycaster.setFromCamera(pointer, camera);
-            const hit = raycaster.intersectObject(mesh, false)[0];
-            hovered = hit?.instanceId !== undefined && landedAt[hit.instanceId] >= 0 ? hit.instanceId : -1;
-          }
-          let settled = placed === count;
-          for (let index = 0; index < count; index += 1) {
-            const start = landedAt[index];
-            if (start < 0) continue;
-            const t = Math.min(1, Math.max(0, (now - start) / DROP_MS));
-            if (t < 1) settled = false;
-            const goal = index === hovered ? 1 : 0;
-            lift[index] += (goal - lift[index]) * Math.min(1, dt / 90);
-            knock[index] = Math.max(0, knock[index] - dt / 700);
-            const k = knock[index];
-            const hop = Math.sin(k * Math.PI) * current.size * 2.2;
-            const fall = (1 - easeOutBack(t)) * current.size * 6;
-            const x = current.centers[index * 3];
-            const y = current.centers[index * 3 + 1] + fall + lift[index] * current.size * 0.55 + hop;
-            const z = current.centers[index * 3 + 2];
-            dummy.position.set(x, y, z);
-            dummy.rotation.set(0, k * Math.PI * 2, (1 - t) * 0.6);
-            dummy.scale.setScalar(Math.min(1, t * 2.2));
-            dummy.updateMatrix();
-            mesh.setMatrixAt(index, dummy.matrix);
-            mixed.copy(clay).lerp(hot, Math.max(lift[index], k));
-            mesh.setColorAt(index, mixed);
-          }
-          mesh.instanceMatrix.needsUpdate = true;
-          if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-          if (settled && isDone && !finished && !finishTimer) {
-            finishTimer = window.setTimeout(() => {
-              finishTimer = 0;
-              finished = true;
-              finishedRef.current?.();
-            }, 900);
-          }
+
+        if (pointerIn && blocks.length) {
+          raycaster.setFromCamera(pointer, camera);
+          const hit = raycaster.intersectObjects(blocks.filter((block) => block.mesh.visible).map((block) => block.mesh), false)[0];
+          hovered = hit ? (blocks.find((block) => block.mesh === hit.object) ?? null) : null;
         }
-        renderer.domElement.style.cursor = hovered >= 0 ? "pointer" : "grab";
+
+        let settled = blocks.length > 0;
+        for (const block of blocks) {
+          const t = (now - block.startAt) / DROP_MS;
+          if (t < 1) settled = false;
+          if (t <= 0) {
+            block.mesh.visible = false;
+            continue;
+          }
+          const k = Math.min(1, t);
+          block.mesh.visible = true;
+          block.lift += ((block === hovered ? 1 : 0) - block.lift) * Math.min(1, dt / 90);
+          block.knock = Math.max(0, block.knock - dt / 800);
+          const hop = Math.sin(block.knock * Math.PI) * 0.45;
+          const fall = (1 - easeOutBack(k)) * 1.6;
+          block.mesh.position.set(block.home.x, block.home.y + fall + block.lift * 0.08 + hop, block.home.z);
+          block.mesh.rotation.set(0, block.spin * block.knock * Math.PI * 2, (1 - k) * 0.35);
+          block.mesh.scale.setScalar(Math.min(1, k * 1.8));
+          block.material.color.copy(clay).lerp(hot, Math.max(block.lift, block.knock));
+        }
+
+        if (settled && isDone && !finished && !finishTimer) {
+          finishTimer = window.setTimeout(() => {
+            finishTimer = 0;
+            finished = true;
+            finishedRef.current?.();
+          }, 1200);
+        }
+        canvas.style.cursor = hovered ? "pointer" : "grab";
         renderer.render(scene, camera);
       };
       raf = requestAnimationFrame(loop);
 
       liveRef.current = {
-        setCells,
-        setProgress,
+        setParts,
+        setDone,
         dispose() {
           cancelAnimationFrame(raf);
           clearTimeout(finishTimer);
@@ -313,15 +303,15 @@ export function BlockBuild({ cells, progress, done, onFinished }: Props) {
           canvas.removeEventListener("pointerdown", onDown);
           canvas.removeEventListener("pointerup", onUp);
           controls.dispose();
-          mesh?.geometry.dispose();
+          clearBlocks();
           idle.geometry.dispose();
-          material.dispose();
+          idleMat.dispose();
           renderer.dispose();
           canvas.remove();
         },
       };
-      setCells(latest.current.cells);
-      setProgress(latest.current.progress, latest.current.done);
+      setParts(latest.current.parts);
+      setDone(latest.current.done);
     })();
     return () => {
       cancelled = true;

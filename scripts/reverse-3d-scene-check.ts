@@ -468,31 +468,26 @@ async function main() {
     .toBuffer();
   process.env.COMFY_MOCK = "1";
 
-  const missing = await postReverse(clip4, null);
-  assert.equal(missing.status, 400);
-  assert.match(missing.payload.error?.message ?? "", /3D scene reference/);
+  // The video job runs in parallel with the 3D subject, so it needs no scene image.
+  const videoOnly = await postReverse(clip4, null);
+  assert.equal(videoOnly.status, 200, JSON.stringify(videoOnly.payload.error ?? videoOnly.payload));
 
-  const tooLong = await postReverse(clip12, png);
-  assert.equal(tooLong.status, 400);
-  assert.match(tooLong.payload.error?.message ?? "", /over 10 seconds/);
-
-  const webmLong = await postReverse(webm12, png, "clip.webm", "video/webm");
-  assert.equal(webmLong.status, 400);
-  assert.match(webmLong.payload.error?.message ?? "", /over 10 seconds/);
-
-  const bare = box("ftyp", Buffer.from("isom\0\0\0\0"));
-  const unreadable = await postReverse(bare, png);
-  assert.equal(unreadable.status, 400);
-  assert.match(unreadable.payload.error?.message ?? "", /length/);
+  // Any length is accepted: the workflow keeps the first 10 seconds itself.
+  const longMp4 = await postReverse(clip12, null);
+  assert.equal(longMp4.status, 200, JSON.stringify(longMp4.payload.error ?? longMp4.payload));
+  const longWebm = await postReverse(webm12, null, "clip.webm", "video/webm");
+  assert.equal(longWebm.status, 200, JSON.stringify(longWebm.payload.error ?? longWebm.payload));
 
   const ok = await postReverse(clip4, png);
   assert.equal(ok.status, 200, JSON.stringify(ok.payload.error ?? ok.payload));
   const workflow = ok.payload.request?.workflow;
   assert.ok(workflow);
-  assert.equal(workflow["12"]?.class_type, "LoadImage");
-  assert.equal((workflow["12"]?.inputs.image as { info?: { file_path?: string } })?.info?.file_path, "scene.png");
-  assert.deepEqual(workflow["20"]?.inputs["model.reference_images.image_1"], ["12", 0]);
-  assert.match(String(workflow["20"]?.inputs["model.prompt"]), /@Image1/);
+  assert.equal(workflow["12"], undefined);
+  assert.equal(workflow["11"]?.class_type, "Video Slice");
+  assert.equal(workflow["11"]?.inputs.duration, 10);
+  assert.deepEqual(workflow["15"]?.inputs.video, ["11", 0]);
+  assert.equal(workflow["20"]?.inputs["model.reference_images.image_1"], undefined);
+  assert.doesNotMatch(String(workflow["20"]?.inputs["model.prompt"]), /@Image1/);
   assert.deepEqual(workflow["20"]?.inputs["model.video_1"], ["16", 0]);
 
   const subjectForm = new FormData();
@@ -541,16 +536,13 @@ async function main() {
 
   const app = getApp("reverse-3d");
   assert.ok(app);
-  assert.throws(
-    () =>
-      buildJobBody(
-        app,
-        { video: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", filePath: "input.mp4" } },
-        { seed: 1, hasImage: true },
-        null,
-      ),
-    /image/,
+  const videoOnlyJob = buildJobBody(
+    app,
+    { video: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", filePath: "input.mp4" } },
+    { seed: 1, hasImage: true },
+    null,
   );
+  assert.equal(videoOnlyJob.workflow["12"], undefined);
 
   console.log("reverse-3d-scene-check ok");
 }
