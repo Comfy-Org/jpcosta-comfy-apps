@@ -79,7 +79,8 @@ export function showGltf(gltf, filename) {
   }
   current = gltf.scene;
   current.traverse((obj) => {
-    if (!obj.isMesh) return;
+    if (!obj.isMesh || !obj.geometry) return;
+    if (!obj.geometry.getAttribute("normal")) obj.geometry.computeVertexNormals();
     obj.material = gray;
     obj.frustumCulled = false;
   });
@@ -116,9 +117,27 @@ document.getElementById("file").addEventListener("change", (event) => {
   reader.readAsArrayBuffer(file);
 });
 
-document.getElementById("front").addEventListener("click", () => {
-  if (current) frame(current);
-});
+function place(direction) {
+  if (!current) return;
+  const bounds = new THREE.Box3().setFromObject(current);
+  const center = bounds.getCenter(new THREE.Vector3());
+  const size = bounds.getSize(new THREE.Vector3());
+  const radius = Math.max(size.x, size.y, size.z, 0.001) * 0.5;
+  const offset = new THREE.Vector3(direction[0], direction[1], direction[2]);
+  if (offset.lengthSq() === 0) offset.set(0, 0, 1);
+  offset.normalize().multiplyScalar(radius * 2.8);
+  controls.target.copy(center);
+  camera.position.copy(center).add(offset);
+  camera.near = Math.max(radius / 200, 0.001);
+  camera.far = radius * 80;
+  camera.lookAt(center);
+  camera.updateProjectionMatrix();
+  controls.update();
+}
+
+window.__place = place;
+
+document.getElementById("front").addEventListener("click", () => place([0, 0.15, 1]));
 
 const params = new URLSearchParams(location.search);
 const named = params.get("glb");
