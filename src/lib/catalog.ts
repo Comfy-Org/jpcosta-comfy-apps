@@ -8,6 +8,7 @@ import {
   VIDEO_SIZE_OPTIONS,
 } from "@/lib/choices";
 import { getApp, listVisibleAppIds, type AppConfig } from "@/lib/config";
+import { PUBLIC_APP_IDS } from "@/lib/public-surface";
 import type { CatalogApp, ClientControl, SpriteGrid } from "@/lib/types";
 
 const VIDEO_POLL_MS = 15 * 60 * 1000;
@@ -349,8 +350,8 @@ function controlsFor(id: string, app: AppConfig): ClientControl[] {
   return [];
 }
 
-export function buildCatalog(): CatalogApp[] {
-  return listVisibleAppIds().map((id) => {
+function catalogFor(ids: readonly string[]): CatalogApp[] {
+  return ids.map((id) => {
     const app = getApp(id);
     const chrome = CHROME[id];
     if (!app || !chrome) {
@@ -376,4 +377,14 @@ export function buildCatalog(): CatalogApp[] {
       pollMs: output === "video" ? VIDEO_POLL_MS : IMAGE_POLL_MS,
     };
   });
+}
+
+/** Every enabled app. The public page does not render this list. */
+export function buildCatalog(): CatalogApp[] {
+  return catalogFor(listVisibleAppIds());
+}
+
+/** Apps on the public allowlist, whether or not a new app was marked enabled. */
+export function buildPublicCatalog(): CatalogApp[] {
+  return catalogFor(PUBLIC_APP_IDS);
 }

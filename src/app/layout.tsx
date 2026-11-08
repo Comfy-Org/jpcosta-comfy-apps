@@ -2,9 +2,8 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Comfy API Apps",
-  description:
-    "Sprite Generator, Virtual Try On, Hand Product Swap, Paparazzi Me, Background Removal, Open Product Swap, Open Unboxing, and Pumpkin Carve on Comfy deployments.",
+  title: "Reverse 3D",
+  description: "Turn a final shot into a blocky playblast.",
 };
 
 export const viewport: Viewport = {
