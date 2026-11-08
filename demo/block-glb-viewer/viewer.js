@@ -1,11 +1,12 @@
 import * as THREE from "three";
 import { OrbitControls } from "./vendor/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "./vendor/jsm/loaders/GLTFLoader.js";
+import { DETAIL_CELLS, simplifyMesh } from "./lod.mjs";
 
 const statusEl = document.getElementById("status");
 const statsEl = document.getElementById("stats");
 const canvas = document.getElementById("view");
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -27,6 +28,9 @@ const gray = new THREE.MeshStandardMaterial({
   metalness: 0,
 });
 let current = null;
+let detailSlots = [];
+let showingFixture = false;
+const maxDetail = DETAIL_CELLS.length - 1;
 
 function resize() {
   const width = canvas.clientWidth || 960;
@@ -70,34 +74,68 @@ function frame(root) {
   return { center, size, radius };
 }
 
-export function showGltf(gltf, filename) {
-  if (current) {
-    scene.remove(current);
-    current.traverse((obj) => {
-      if (obj.isMesh) obj.material = null;
-    });
+function geometryFrom(positions, indices) {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function detailLevels(mesh) {
+  const position = mesh.geometry.getAttribute("position");
+  const index = mesh.geometry.getIndex();
+  if (!position || !index) return [mesh.geometry];
+  return DETAIL_CELLS.map((cell) => {
+    const simplified = simplifyMesh(position.array, index.array, cell);
+    return geometryFrom(simplified.positions, simplified.indices);
+  });
+}
+
+function applyDetail(level) {
+  const chosen = Math.max(0, Math.min(maxDetail, level));
+  for (const slot of detailSlots) slot.mesh.geometry = slot.geometries[chosen];
+  const detail = document.getElementById("detail");
+  if (detail) detail.value = String(chosen);
+  if (!showingFixture && current) {
+    setStatus(
+      chosen === maxDetail
+        ? "Mesh original no máximo. O controle só junta vértices próximos."
+        : "Menos triângulos das mesmas peças. Nada de geometria nova.",
+    );
   }
+  const counts = countGeometry(current);
+  document.body.dataset.detail = String(chosen);
+  document.body.dataset.triangles = String(counts.triangles);
+  document.body.dataset.vertices = String(counts.vertices);
+  if (statsEl && current) {
+    statsEl.textContent = `${counts.meshes} meshes · ${counts.vertices} vertices · ${counts.triangles} triangles`;
+  }
+}
+
+export function showGltf(gltf, filename) {
+  if (current) scene.remove(current);
   current = gltf.scene;
+  detailSlots = [];
   current.traverse((obj) => {
     if (!obj.isMesh || !obj.geometry) return;
-    if (!obj.geometry.getAttribute("normal")) obj.geometry.computeVertexNormals();
+    const geometries = detailLevels(obj);
+    detailSlots.push({ mesh: obj, geometries });
     obj.material = gray;
     obj.frustumCulled = false;
   });
   scene.add(current);
-  const counts = countGeometry(current);
-  const framed = frame(current);
+  applyDetail(maxDetail);
+  frame(current);
   const fixture = /loader-fixture/i.test(filename);
+  showingFixture = fixture;
   setStatus(
     fixture
       ? "Loader fixture only. This is not the Hunyuan scene."
-      : `Showing ${filename}. Source triangles, gray material, no column fill.`,
+      : "Mesh original no máximo. O controle só junta vértices próximos.",
   );
-  statsEl.textContent = `${counts.meshes} meshes · ${counts.vertices} vertices · ${counts.triangles} triangles · size ${framed.size.x.toFixed(2)} × ${framed.size.y.toFixed(2)} × ${framed.size.z.toFixed(2)}`;
   document.body.dataset.ready = "1";
-  document.body.dataset.triangles = String(counts.triangles);
-  document.body.dataset.vertices = String(counts.vertices);
-  return counts;
+  return countGeometry(current);
 }
 
 function parseArrayBuffer(buffer, filename) {
@@ -138,6 +176,21 @@ function place(direction) {
 window.__place = place;
 
 document.getElementById("front").addEventListener("click", () => place([0, 0.15, 1]));
+document.getElementById("reset").addEventListener("click", () => {
+  applyDetail(maxDetail);
+  place([0, 0.15, 1]);
+});
+document.getElementById("detail").addEventListener("input", (event) => {
+  applyDetail(Number(event.target.value));
+});
+document.getElementById("capture").addEventListener("click", () => {
+  if (!current) return;
+  renderer.render(scene, camera);
+  const link = document.createElement("a");
+  link.href = renderer.domElement.toDataURL("image/png");
+  link.download = "vista.png";
+  link.click();
+});
 
 const params = new URLSearchParams(location.search);
 const named = params.get("glb");
@@ -150,9 +203,18 @@ if (named) {
     })
     .then((buffer) => parseArrayBuffer(buffer, named.split("/").pop() || named))
     .catch((error) => setStatus(error instanceof Error ? error.message : "The GLB file is not available yet."));
+} else if (typeof window.__EMBEDDED_GLB === "string" && window.__EMBEDDED_GLB) {
+  const bytes = Uint8Array.from(atob(window.__EMBEDDED_GLB), (char) => char.charCodeAt(0));
+  parseArrayBuffer(bytes.buffer, "whole-scene.glb");
 } else {
   setStatus("Waiting for the Hunyuan GLB. No geometry is invented.");
   statsEl.textContent = "No mesh loaded.";
+}
+
+const reference = document.getElementById("reference");
+if (reference && typeof window.__EMBEDDED_REF === "string" && window.__EMBEDDED_REF) {
+  reference.src = `data:image/jpeg;base64,${window.__EMBEDDED_REF}`;
+  reference.hidden = false;
 }
 
 function animate() {

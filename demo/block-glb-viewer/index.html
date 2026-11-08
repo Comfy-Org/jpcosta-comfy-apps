@@ -11,7 +11,12 @@
       h1 { font-size: 18px; margin: 0 0 6px; font-weight: 600; }
       p { margin: 0; font-size: 13px; line-height: 1.45; max-width: 78ch; }
       .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 18px; font-size: 13px; }
-      canvas { width: min(1100px, calc(100% - 36px)); height: 640px; display: block; margin: 0 18px 18px; border-radius: 8px; background: #2a2a2e; }
+      .stage { display: grid; grid-template-columns: 1fr 1.2fr; gap: 12px; padding: 0 18px 18px; align-items: start; }
+      .stage:has(#reference[hidden]) { grid-template-columns: 1fr; }
+      img, canvas { width: 100%; border-radius: 8px; background: #2a2a2e; display: block; }
+      canvas { height: 640px; }
+      figcaption { font-size: 12px; margin-top: 4px; }
+      figure:has(img[hidden]) { display: none; }
       #stats { font-variant-numeric: tabular-nums; }
     </style>
     <script type="importmap">
@@ -32,11 +37,23 @@
     </header>
     <div class="row">
       <label>GLB <input id="file" type="file" accept=".glb,.gltf,model/gltf-binary" /></label>
-      <button id="front" type="button">Front</button>
+      <label>Mais simples <input id="detail" type="range" min="0" max="4" step="1" value="4" /> Mais detalhado</label>
+      <button id="front" type="button">Frente</button>
+      <button id="reset" type="button">Repor</button>
+      <button id="capture" type="button">Guardar vista</button>
       <span id="status">Waiting for the Hunyuan GLB. No geometry is invented.</span>
       <span id="stats"></span>
     </div>
-    <canvas id="view"></canvas>
+    <div class="stage">
+      <figure>
+        <img id="reference" alt="Referência 2D" hidden />
+        <figcaption>Referência 2D, não é o modelo</figcaption>
+      </figure>
+      <figure>
+        <canvas id="view"></canvas>
+        <figcaption>Malha gerada, vista atual</figcaption>
+      </figure>
+    </div>
     <script type="module" src="./viewer.js"></script>
   </body>
 </html>
