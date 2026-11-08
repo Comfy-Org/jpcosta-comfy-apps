@@ -24,14 +24,22 @@ const CLAY = 0xc9cbd1;
 /** Things around the subject, a shade darker so the subject reads first. */
 const PROP_CLAY = 0xa6aab4;
 const HOT = 0xf2ff59;
-/** Time between two blocks landing. */
+/** Time between two blocks landing, for a single subject's dozen blocks. */
 const GAP_MS = 650;
+/** A shot with many subjects lands all its blocks in about this long, but never faster than GAP_MIN_MS apart. */
+const BUILD_MS = 6500;
+const GAP_MIN_MS = 70;
 const DROP_MS = 560;
 /** From the waiting view to the shot's camera. */
 const FLY_MS = 900;
 /** Once a few blocks are down, the camera sways off the shot's angle to show they are 3D. */
 const SWAY_YAW = 0.42;
 const SWAY_PITCH = 0.2;
+/**
+ * How far a subject may slide off its picture at the far end of a sway, in radians. The frame stands on the plane the
+ * camera turns around; a subject in front of it or behind it slides as the camera turns, so a deep scene sways less.
+ */
+const SWAY_SLIP = 0.07;
 const SWAY_PERIOD_MS = 12_000;
 /** After a drag, the camera stays where it was left for this long. */
 const SWAY_REST_MS = 2500;
@@ -151,6 +159,9 @@ export function BlockBuild({ parts, plate = null, done, onFinished }: Props) {
       host.appendChild(renderer.domElement);
 
       const scene = new THREE.Scene();
+      // The frame is drawn first, on its own, so it never hides a block that stands behind its plane.
+      const backdrop = new THREE.Scene();
+      renderer.autoClear = false;
       const camera = new THREE.PerspectiveCamera(32, 1, 0.05, 80);
       camera.position.set(2.6, 1.4, 3.4);
       const controls = new OrbitControls(camera, renderer.domElement);
@@ -235,6 +246,8 @@ export function BlockBuild({ parts, plate = null, done, onFinished }: Props) {
       let shot: { target: InstanceType<typeof THREE.Vector3>; position: InstanceType<typeof THREE.Vector3>; fov: number } | null = null;
       let fly: { from: InstanceType<typeof THREE.Vector3>; fromTarget: InstanceType<typeof THREE.Vector3>; fromFov: number; start: number } | null = null;
       let swayStart = 0;
+      /** Share of the full sway this layout gets: 1 for one subject just in front of the frame, less for a deep scene. */
+      let swayShare = 1;
       let dragging = false;
       let draggedAt = -Infinity;
       const offset = new THREE.Vector3();
@@ -260,7 +273,7 @@ export function BlockBuild({ parts, plate = null, done, onFinished }: Props) {
       function removePlate() {
         plateToken += 1;
         if (plateMesh) {
-          scene.remove(plateMesh);
+          backdrop.remove(plateMesh);
           plateMesh.geometry.dispose();
           plateMaterial?.map?.dispose();
           plateMaterial?.dispose();
@@ -291,8 +304,7 @@ export function BlockBuild({ parts, plate = null, done, onFinished }: Props) {
         const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
         mesh.position.set(placement.center[0], placement.center[1], placement.center[2]);
         mesh.scale.set(placement.size[0], placement.size[1], 1);
-        mesh.renderOrder = -1;
-        scene.add(mesh);
+        backdrop.add(mesh);
         plateMesh = mesh;
         plateMaterial = material;
         plateBorn = performance.now();
@@ -325,6 +337,7 @@ export function BlockBuild({ parts, plate = null, done, onFinished }: Props) {
         if (!next) return;
         const now = performance.now();
         // Bottom up, and the bigger block first when two start at the same height.
+        const gapMs = Math.min(GAP_MS, Math.max(GAP_MIN_MS, BUILD_MS / Math.max(1, next.boxes.length)));
         const order = next.boxes
           .map((box) => {
             const sin = Math.abs(Math.sin(box.rotation ?? 0));
@@ -338,7 +351,14 @@ export function BlockBuild({ parts, plate = null, done, onFinished }: Props) {
           const radius = Math.min(w, h, d) * 0.12;
           const base = box.kind === "prop" ? propClay : clay;
           const material = new THREE.MeshStandardMaterial({ color: base, roughness: 0.8 });
-          const mesh = new THREE.Mesh(new RoundedBoxGeometry(w - gap, h - gap, d - gap, 3, radius), material);
+          const geometry = box.wheel ? new THREE.CylinderGeometry(0.5, 0.5, 1, 28) : new RoundedBoxGeometry(w - gap, h - gap, d - gap, 3, radius);
+          if (box.wheel) {
+            // A wheel is a drum: its axle points at the camera ("z"), or sideways when it is seen edge on ("x").
+            if (box.wheel === "z") geometry.rotateX(Math.PI / 2);
+            else geometry.rotateZ(Math.PI / 2);
+            geometry.scale(w - gap, h - gap, d - gap);
+          }
+          const mesh = new THREE.Mesh(geometry, material);
           mesh.castShadow = true;
           mesh.receiveShadow = true;
           mesh.visible = false;
@@ -350,7 +370,7 @@ export function BlockBuild({ parts, plate = null, done, onFinished }: Props) {
             name: box.name ?? "",
             home: new THREE.Vector3(box.center[0], box.center[1], box.center[2]),
             turn: box.rotation ?? 0,
-            startAt: reduce ? now - DROP_MS : now + 250 + slot * GAP_MS,
+            startAt: reduce ? now - DROP_MS : now + 250 + slot * gapMs,
             lift: 0,
             knock: 0,
             spin: 0,
@@ -369,7 +389,12 @@ export function BlockBuild({ parts, plate = null, done, onFinished }: Props) {
           controls.maxPolarAngle = Math.PI / 2;
           controls.minDistance = next.camera.distance * 0.55;
           controls.maxDistance = next.camera.distance * 1.5;
-          swayStart = now + 250 + Math.min(order.length, 6) * GAP_MS;
+          swayStart = now + 250 + Math.min(order.length * gapMs, 6 * GAP_MS);
+          // Turning by an angle slides a subject off its picture by about angle × its distance from the frame's plane / distance.
+          const depths = new Map<number, number[]>();
+          for (const box of next.boxes) depths.set(box.subject ?? 0, [...(depths.get(box.subject ?? 0) ?? []), box.center[2] - next.camera.target[2]]);
+          const spread = Math.max(0, ...[...depths.values()].map((list) => Math.abs(list.reduce((sum, z) => sum + z, 0) / list.length)));
+          swayShare = spread > 0 ? Math.min(1, (SWAY_SLIP * next.camera.distance) / (SWAY_YAW * spread)) : 1;
           if (reduce) {
             fly = null;
             controls.target.copy(shot.target);
@@ -479,8 +504,8 @@ export function BlockBuild({ parts, plate = null, done, onFinished }: Props) {
           spherical.setFromVector3(offset);
           // Follows the wave at the same pace on a slow device as on a fast one.
           const ease = 1 - Math.exp(-elapsed / 700);
-          spherical.theta += (SWAY_YAW * wave - spherical.theta) * ease;
-          spherical.phi += (Math.PI / 2 - SWAY_PITCH * wave * wave - spherical.phi) * ease;
+          spherical.theta += (SWAY_YAW * swayShare * wave - spherical.theta) * ease;
+          spherical.phi += (Math.PI / 2 - SWAY_PITCH * swayShare * wave * wave - spherical.phi) * ease;
           offset.setFromSpherical(spherical);
           camera.position.copy(controls.target).add(offset);
         }
@@ -549,6 +574,9 @@ export function BlockBuild({ parts, plate = null, done, onFinished }: Props) {
           }, 1200);
         }
         canvas.style.cursor = hovered ? "pointer" : "grab";
+        renderer.clear();
+        renderer.render(backdrop, camera);
+        renderer.clearDepth();
         renderer.render(scene, camera);
       };
       raf = requestAnimationFrame(loop);

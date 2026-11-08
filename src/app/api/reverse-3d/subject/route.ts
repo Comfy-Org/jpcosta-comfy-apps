@@ -11,12 +11,17 @@ import {
   backgroundModelName,
   buildCutoutWorkflow,
   buildHunyuanWorkflow,
+  buildMarkWorkflow,
   buildPickWorkflow,
   comboOptions,
   cutoutAssetToken,
-  MOCK_SCENE_REPLY,
-  parseSubjectScene,
+  isSubjectKind,
+  MAX_SUBJECTS,
+  MOCK_FIND_REPLY,
+  MOCK_MARK_REPLY,
+  parseSceneFind,
   SUBJECT_FRAME_CAP,
+  type SubjectKind,
 } from "@/lib/subject-pipeline";
 import type { JobView } from "@/lib/types";
 import { assetRef, type Workflow } from "@/lib/workflow";
@@ -26,6 +31,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const FRAME_SIDE = 1024;
+/** Close-ups arrive at this size from the browser; a bigger one is scaled down. */
+const CLOSE_UP_SIDE = 768;
 
 function numbers(value: FormDataEntryValue | null): number[] {
   if (typeof value !== "string" || !value.trim()) return [];
@@ -33,6 +40,22 @@ function numbers(value: FormDataEntryValue | null): number[] {
     .split(",")
     .map((part) => Number(part))
     .filter((part) => Number.isFinite(part) && part >= 0);
+}
+
+/** The kind of each close-up, in order, from a comma list. */
+function closeUpKinds(value: FormDataEntryValue | null, count: number): SubjectKind[] {
+  const kinds = typeof value === "string" ? value.split(",").map((part) => part.trim()) : [];
+  if (kinds.length !== count || !kinds.every(isSubjectKind)) throw new AppError(400, "invalid_input", "Each close-up needs its kind.");
+  return kinds as SubjectKind[];
+}
+
+/** Where each subject sits in its close-up: four numbers per close-up, [ymin, xmin, ymax, xmax] in 0-1000. */
+function closeUpBoxes(value: FormDataEntryValue | null, count: number): number[][] {
+  const values = typeof value === "string" && value.trim() ? value.split(",").map((part) => Number(part)) : [];
+  if (values.length !== count * 4 || values.some((part) => !Number.isFinite(part) || part < 0 || part > 1000)) {
+    throw new AppError(400, "invalid_input", "Each close-up needs its box.");
+  }
+  return Array.from({ length: count }, (_, index) => values.slice(index * 4, index * 4 + 4));
 }
 
 function wireImage(workflow: Workflow, nodeId: string, id: string, filePath: string): void {
@@ -178,7 +201,8 @@ export async function POST(request: Request) {
       throw new AppError(400, "invalid_input", "Upload the frames as form data.");
     }
     const requested = form.get("step");
-    const step = requested === "hunyuan" ? "hunyuan" : requested === "cutout" || requested === "mesh" ? "cutout" : "pick";
+    const step =
+      requested === "hunyuan" ? "hunyuan" : requested === "cutout" || requested === "mesh" ? "cutout" : requested === "mark" ? "mark" : "pick";
     const files = form.getAll("frame").filter((entry): entry is File => entry instanceof File && entry.size > 0);
     if (step !== "hunyuan" && files.length === 0) throw new AppError(400, "invalid_input", "Upload a frame from the clip.");
     if (files.length > SUBJECT_FRAME_CAP) {
@@ -192,14 +216,14 @@ export async function POST(request: Request) {
     if (step === "pick") {
       const workflow = buildPickWorkflow(files.length);
       if (mock) {
-        const scene = parseSubjectScene(MOCK_SCENE_REPLY, files.length);
+        const found = parseSceneFind(MOCK_FIND_REPLY, files.length);
         return Response.json({
           mock: true,
           step: "pick",
-          frame: scene.frame,
-          subject: scene.subject,
-          time: times[scene.frame] ?? 0,
-          reply: MOCK_SCENE_REPLY,
+          frame: found.frame,
+          subject: found.subject,
+          time: times[found.frame] ?? 0,
+          reply: MOCK_FIND_REPLY,
           pick: workflow,
         });
       }
@@ -215,6 +239,33 @@ export async function POST(request: Request) {
       );
       const jobId = await submitJob(target, { workflow, extra_data: { api_key_comfy_org: key ?? "" } }, crypto.randomUUID());
       return Response.json({ step: "pick", jobId: publicRouteId("reverse-3d", jobId) });
+    }
+
+    // Second job: the chosen frame and one close-up per subject, each marked part by part.
+    if (step === "mark") {
+      if (files.length !== 1) throw new AppError(400, "invalid_input", "Upload the chosen frame once.");
+      const crops = form.getAll("crop").filter((entry): entry is File => entry instanceof File && entry.size > 0);
+      if (crops.length === 0 || crops.length > MAX_SUBJECTS) {
+        throw new AppError(400, "invalid_input", `Send 1 to ${MAX_SUBJECTS} close-ups.`);
+      }
+      const kinds = closeUpKinds(form.get("kinds"), crops.length);
+      const boxes = closeUpBoxes(form.get("boxes"), crops.length);
+      const workflow = buildMarkWorkflow(kinds, boxes);
+      if (mock) return Response.json({ mock: true, step: "mark", reply: MOCK_MARK_REPLY, mark: workflow });
+      const target = deploymentTarget("reverse-3d");
+      const uploads = [
+        { file: files[0], side: FRAME_SIDE, node: "1", filePath: "frame.png" },
+        ...crops.map((file, index) => ({ file, side: CLOSE_UP_SIDE, node: String(index + 2), filePath: `subject_${index + 1}.png` })),
+      ];
+      await Promise.all(
+        uploads.map(async (upload) => {
+          const png = await prepareImage(upload.file, upload.side);
+          const id = await uploadAsset(target, png, upload.filePath, "image/png");
+          wireImage(workflow, upload.node, id, upload.filePath);
+        }),
+      );
+      const jobId = await submitJob(target, { workflow, extra_data: { api_key_comfy_org: key ?? "" } }, crypto.randomUUID());
+      return Response.json({ step: "mark", jobId: publicRouteId("reverse-3d", jobId) });
     }
 
     if (mock) return Response.json(mockMesh(0, "The main subject", times[0] ?? 0));
