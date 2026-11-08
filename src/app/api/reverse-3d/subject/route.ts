@@ -1,4 +1,5 @@
 import { fetchAssetUrl, fetchDeploymentJson, fetchJob, submitJob, uploadAsset } from "@/lib/comfy";
+import { ensureBackgroundRemoval, readBackgroundRemoval, startingMessage } from "@/lib/deploy-control";
 import { deploymentTarget, type DeploymentTarget } from "@/lib/deployments";
 import { apiKey, isMockMode, missingKeyMessage } from "@/lib/env";
 import { AppError, errorResponse } from "@/lib/http";
@@ -120,6 +121,13 @@ function meshPayload(reduced: ReturnType<typeof reduceMesh>, frame: number, subj
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
+    if (url.searchParams.get("host") === "background-removal") {
+      if (isMockMode()) return Response.json({ mock: true, status: "ready" });
+      const cutoutKey = apiKey("background-removal");
+      if (!cutoutKey) throw new AppError(500, "missing_key", missingKeyMessage("background-removal"));
+      const view = await readBackgroundRemoval(cutoutKey);
+      return Response.json({ id: view.id, status: view.status });
+    }
     const output = url.searchParams.get("output") ?? "";
     const signature = url.searchParams.get("sig");
     if (!output || output.includes("/") || output.includes("..") || !verifyAssetSignature(output, signature)) {
@@ -193,8 +201,11 @@ export async function POST(request: Request) {
         cutout: buildCutoutWorkflow(backgroundModelName(["birefnet.safetensors"])),
       });
     }
-    if (!apiKey("background-removal")) {
-      throw new AppError(500, "missing_key", missingKeyMessage("background-removal"));
+    const cutoutKey = apiKey("background-removal");
+    if (!cutoutKey) throw new AppError(500, "missing_key", missingKeyMessage("background-removal"));
+    const host = await ensureBackgroundRemoval(cutoutKey);
+    if (host.status !== "ready") {
+      throw new AppError(503, "deployment_not_ready", startingMessage(host));
     }
     const cutoutTarget = deploymentTarget("background-removal");
     const meshTarget = deploymentTarget("reverse-3d");

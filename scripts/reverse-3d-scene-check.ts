@@ -10,6 +10,7 @@ import { POST as postSubject } from "../src/app/api/reverse-3d/subject/route";
 import { getApp } from "../src/lib/config";
 import { blockFigureMesh, decodeGlb, encodeGlb, reduceMesh } from "../src/lib/mesh-reduce";
 import { buildBoxMesh, orbitFromDrag, projectPoint, SCENE_CLAY, SCENE_DEFAULT_PITCH, SCENE_DEFAULT_YAW, sceneMvp } from "../src/lib/scene-mesh";
+import { RELEASE_DELETED_DEPLOYMENTS, REVERSE_3D_DEPLOYMENT_ID, spareDeploymentToStop } from "../src/lib/deploy-control";
 import { getDeployment } from "../src/lib/deployments";
 import {
   BACKGROUND_REMOVAL_DEPLOYMENT_ID,
@@ -151,6 +152,24 @@ async function main() {
   assert.equal(backgroundModelName(["birefnet.safetensors"]), "birefnet.safetensors");
   assert.equal(backgroundModelName(["BiRefNet-general.safetensors"]), "BiRefNet-general.safetensors");
   assert.equal(getDeployment("background-removal")?.deploymentId, BACKGROUND_REMOVAL_DEPLOYMENT_ID);
+  assert.equal(getDeployment("reverse-3d")?.deploymentId, REVERSE_3D_DEPLOYMENT_ID);
+  const running = [
+    { id: REVERSE_3D_DEPLOYMENT_ID, status: "ready" },
+    { id: RELEASE_DELETED_DEPLOYMENTS[0], status: "ready" },
+    { id: RELEASE_DELETED_DEPLOYMENTS[1], status: "stopped" },
+    { id: "dep-6e5a0ab1-8131-4ee8-acb7-ae1840160e13", status: "ready" },
+  ];
+  assert.equal(
+    spareDeploymentToStop(running, [BACKGROUND_REMOVAL_DEPLOYMENT_ID, REVERSE_3D_DEPLOYMENT_ID]),
+    RELEASE_DELETED_DEPLOYMENTS[0],
+  );
+  assert.equal(
+    spareDeploymentToStop(
+      running.map((row) => ({ ...row, status: row.id === REVERSE_3D_DEPLOYMENT_ID ? "ready" : "stopped" })),
+      [BACKGROUND_REMOVAL_DEPLOYMENT_ID, REVERSE_3D_DEPLOYMENT_ID],
+    ),
+    null,
+  );
   assert.equal(backgroundModelForDeployment(BACKGROUND_REMOVAL_DEPLOYMENT_ID, null), "birefnet.safetensors");
   assert.equal(backgroundModelForDeployment(BACKGROUND_REMOVAL_DEPLOYMENT_ID, ["BiRefNet-general.safetensors"]), "BiRefNet-general.safetensors");
   assert.throws(() => backgroundModelForDeployment(BACKGROUND_REMOVAL_DEPLOYMENT_ID, []), /no background-removal model/);
