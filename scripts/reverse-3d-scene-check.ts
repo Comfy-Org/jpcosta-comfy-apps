@@ -8,6 +8,7 @@ import sharp from "sharp";
 import { POST } from "../src/app/api/run/[app]/route";
 import { POST as postSubject } from "../src/app/api/reverse-3d/subject/route";
 import { getApp } from "../src/lib/config";
+import { mapJob } from "../src/lib/comfy";
 import { blockFigureMesh, decodeGlb, encodeGlb, reduceMesh } from "../src/lib/mesh-reduce";
 import { decidePublicRequest, isPublicApp } from "../src/lib/public-surface";
 import { signAssetId, verifyAssetSignature } from "../src/lib/signing";
@@ -168,7 +169,11 @@ async function main() {
   assert.throws(() => parseSubjectChoice("frame: 13\nsubject: someone", 12), /not sampled/);
   assert.equal(selectMeshOutput([{ id: "png", name: "preview.png" }, { id: "mesh", name: "hunyuan.glb" }])?.id, "mesh");
   assert.equal(selectMeshOutput([{ id: "png", name: "preview.png" }]), null);
-  assert.equal(selectMeshOutput([{ id: "mesh", name: "GLB" }])?.id, "mesh");
+  assert.equal(selectMeshOutput([{ id: "mesh", name: "GLB" }]), null);
+  assert.equal(
+    selectMeshOutput([{ id: "mesh", name: "model", type: "file", contentType: "model/gltf-binary" }])?.id,
+    "mesh",
+  );
   assert.equal(selectTextOutput([{ id: "png", name: "frame.png" }, { id: "text", name: "subject_00001_.txt" }])?.id, "text");
   const cutoutId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const cutoutToken = cutoutAssetToken(cutoutId);
@@ -212,9 +217,59 @@ async function main() {
   assert.equal(meshGraph["2"], undefined);
   assert.equal(JSON.stringify(meshGraph).includes("LoadBackgroundRemovalModel"), false);
   assert.equal(JSON.stringify(meshGraph).includes("birefnet"), false);
-  assert.equal(meshGraph["21"]?.class_type, "TencentImageToModelNode");
-  assert.equal(meshGraph["21"]?.inputs.generate_type, "Geometry");
-  assert.deepEqual(meshGraph["21"]?.inputs.image, ["1", 0]);
+  assert.equal(meshGraph["22"]?.class_type, "TencentImageToModelNode");
+  assert.equal(meshGraph["22"]?.inputs.generate_type, "Geometry");
+  assert.deepEqual(meshGraph["22"]?.inputs.image, ["1", 0]);
+  assert.equal(meshGraph["21"]?.class_type, "SaveGLB");
+  assert.deepEqual(meshGraph["21"]?.inputs.mesh, ["22", 1]);
+  assert.notDeepEqual(meshGraph["21"]?.inputs.mesh, ["22", 0]);
+  assert.equal(getApp("reverse-3d")?.output.node, "21");
+
+  const paidJob = JSON.parse(
+    readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/hunyuan-paid-job.json"), "utf8"),
+  ) as { id: string; status: string; outputs: []; error: null };
+  const paidLogs = JSON.parse(
+    readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/hunyuan-paid-logs.json"), "utf8"),
+  ) as { text: string; complete: boolean };
+  assert.deepEqual(paidJob.outputs, []);
+  assert.equal(paidJob.error, null);
+  const paidView = mapJob({ id: paidJob.id, status: paidJob.status, outputs: paidJob.outputs, error: paidJob.error });
+  assert.equal(paidView.status, "succeeded");
+  assert.equal(paidView.error, null);
+  assert.deepEqual(paidView.outputs, []);
+  assert.equal(selectMeshOutput(paidView.outputs), null);
+  assert.equal(paidLogs.complete, true);
+  assert.equal(/\.glb|https?:\/\//i.test(paidLogs.text), false);
+  const committed = mapJob({
+    id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    status: "succeeded",
+    outputs: [
+      {
+        id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        node_id: "21",
+        name: "mesh_00001.glb",
+        type: "file",
+        content_type: "model/gltf-binary",
+      },
+      {
+        id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        node_id: "21",
+        name: "preview.png",
+        type: "image",
+        content_type: "image/png",
+      },
+      {
+        id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        node_id: "21",
+        name: "notes.bin",
+        type: "file",
+        content_type: "application/octet-stream",
+      },
+    ],
+  });
+  assert.equal(selectMeshOutput(committed.outputs)?.id, "cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+  assert.equal(selectMeshOutput(committed.outputs)?.type, "file");
+  assert.equal(selectMeshOutput([{ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name: "preview.png", type: "image" }]), null);
 
   const source = blockFigureMesh();
   const reduced = reduceMesh(source);
@@ -460,7 +515,9 @@ async function main() {
   assert.equal(subjectResponse.status, 200, JSON.stringify(subjectBody.error));
   assert.equal(subjectBody.subject, "The main subject");
   assert.equal(subjectBody.pick?.["20"]?.class_type, "GeminiNodeV3");
-  assert.equal(subjectBody.mesh?.["21"]?.class_type, "TencentImageToModelNode");
+  assert.equal(subjectBody.mesh?.["22"]?.class_type, "TencentImageToModelNode");
+  assert.equal(subjectBody.mesh?.["21"]?.class_type, "SaveGLB");
+  assert.deepEqual(subjectBody.mesh?.["21"]?.inputs?.mesh, ["22", 1]);
   assert.equal(subjectBody.mesh?.["2"], undefined);
   assert.equal(JSON.stringify(subjectBody.mesh).includes("birefnet"), false);
   assert.equal(subjectBody.cutout?.["2"]?.class_type, "LoadBackgroundRemovalModel");
