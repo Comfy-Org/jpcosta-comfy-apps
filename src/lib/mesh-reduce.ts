@@ -206,65 +206,175 @@ export function encodeGlb(mesh: TriangleMesh): Buffer {
 
 type GltfAccessor = {
   bufferView?: number;
+  byteOffset?: number;
   componentType?: number;
   count?: number;
   type?: string;
 };
 
-type GltfDocument = {
-  buffers?: { byteLength?: number }[];
-  bufferViews?: { buffer?: number; byteOffset?: number; byteLength?: number }[];
-  accessors?: GltfAccessor[];
-  meshes?: { primitives?: { attributes?: { POSITION?: number }; indices?: number }[] }[];
+type GltfBufferView = {
+  buffer?: number;
+  byteOffset?: number;
+  byteLength?: number;
+  byteStride?: number;
 };
 
-/** Read the first POSITION primitive. Hunyuan returns a GLB; this is how the server reduces it. */
-export function decodeGlb(bytes: Buffer): TriangleMesh {
-  if (bytes.length < 20 || bytes.readUInt32LE(0) !== 0x46546c67) {
-    throw new Error("That 3D model could not be read.");
+type GltfPrimitive = {
+  attributes?: { POSITION?: number };
+  indices?: number;
+};
+
+type GltfDocument = {
+  buffers?: { byteLength?: number; uri?: string }[];
+  bufferViews?: GltfBufferView[];
+  accessors?: GltfAccessor[];
+  meshes?: { primitives?: GltfPrimitive[] }[];
+};
+
+function notAMesh(bytes: Buffer): string {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return "Hunyuan returned an image, not a 3D mesh.";
   }
-  const jsonLength = bytes.readUInt32LE(12);
-  const json = JSON.parse(bytes.subarray(20, 20 + jsonLength).toString("utf8")) as GltfDocument;
-  const binStart = 20 + jsonLength + 8;
-  const primitive = json.meshes?.[0]?.primitives?.[0];
-  const positionIndex = primitive?.attributes?.POSITION;
-  const indexIndex = primitive?.indices;
-  if (positionIndex === undefined || indexIndex === undefined) throw new Error("That 3D model could not be read.");
-  const readView = (accessorIndex: number): { accessor: GltfAccessor; bytes: Buffer } => {
-    const accessor = json.accessors?.[accessorIndex];
-    const view = accessor?.bufferView !== undefined ? json.bufferViews?.[accessor.bufferView] : undefined;
-    if (!accessor || !view) throw new Error("That 3D model could not be read.");
-    const start = binStart + (view.byteOffset ?? 0);
-    return { accessor, bytes: bytes.subarray(start, start + (view.byteLength ?? 0)) };
-  };
-  const position = readView(positionIndex);
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "Hunyuan returned an image, not a 3D mesh.";
+  }
+  return "Hunyuan returned a file that is not a GLB mesh.";
+}
+
+function componentBytes(componentType: number | undefined): number {
+  if (componentType === 5126 || componentType === 5125) return 4;
+  if (componentType === 5123) return 2;
+  if (componentType === 5121) return 1;
+  return 0;
+}
+
+function elementWidth(type: string | undefined, component: number): number {
+  if (type === "SCALAR") return component;
+  if (type === "VEC3") return component * 3;
+  return 0;
+}
+
+/** Packed copy. Honors accessor.byteOffset and a bufferView byteStride wider than the element. */
+function tightElements(bin: Buffer, start: number, count: number, stride: number, width: number): Buffer {
+  const out = Buffer.alloc(count * width);
+  if (stride === width) {
+    bin.copy(out, 0, start, start + count * width);
+    return out;
+  }
+  for (let index = 0; index < count; index += 1) {
+    const from = start + index * stride;
+    bin.copy(out, index * width, from, from + width);
+  }
+  return out;
+}
+
+function readAccessor(json: GltfDocument, bin: Buffer, accessorIndex: number): { accessor: GltfAccessor; bytes: Buffer } {
+  const accessor = json.accessors?.[accessorIndex];
+  const view = accessor?.bufferView !== undefined ? json.bufferViews?.[accessor.bufferView] : undefined;
+  if (!accessor || !view || (view.buffer ?? 0) !== 0) {
+    throw new Error("Hunyuan returned a GLB with no triangle mesh.");
+  }
+  if (json.buffers?.[0]?.uri) throw new Error("Hunyuan returned a file that is not a GLB mesh.");
+  const component = componentBytes(accessor.componentType);
+  const width = elementWidth(accessor.type, component);
+  const count = accessor.count ?? 0;
+  if (!component || !width || count < 1) throw new Error("Hunyuan returned a GLB with no triangle mesh.");
+  const declaredStride = view.byteStride ?? 0;
+  const stride = declaredStride > width ? declaredStride : width;
+  const start = (view.byteOffset ?? 0) + (accessor.byteOffset ?? 0);
+  const need = (count - 1) * stride + width;
+  if (start < 0 || start + need > bin.length) throw new Error("Hunyuan returned a GLB with no triangle mesh.");
+  return { accessor, bytes: tightElements(bin, start, count, stride, width) };
+}
+
+function indicesFrom(accessor: GltfAccessor, packed: Buffer): Uint32Array {
+  const count = accessor.count ?? 0;
+  if (accessor.componentType === 5125) {
+    const copy = Buffer.alloc(packed.length);
+    packed.copy(copy);
+    return new Uint32Array(copy.buffer, copy.byteOffset, count);
+  }
+  if (accessor.componentType === 5123) {
+    const copy = Buffer.alloc(packed.length);
+    packed.copy(copy);
+    return new Uint32Array(new Uint16Array(copy.buffer, copy.byteOffset, count));
+  }
+  if (accessor.componentType === 5121) {
+    const indices = new Uint32Array(count);
+    for (let index = 0; index < count; index += 1) indices[index] = packed[index] ?? 0;
+    return indices;
+  }
+  throw new Error("Hunyuan returned a GLB with no triangle mesh.");
+}
+
+function readPrimitive(json: GltfDocument, bin: Buffer, primitive: GltfPrimitive): TriangleMesh | null {
+  const positionIndex = primitive.attributes?.POSITION;
+  const indexIndex = primitive.indices;
+  if (positionIndex === undefined || indexIndex === undefined) return null;
+  const position = readAccessor(json, bin, positionIndex);
   if (position.accessor.componentType !== 5126 || position.accessor.type !== "VEC3") {
-    throw new Error("That 3D model could not be read.");
+    throw new Error("Hunyuan returned a GLB with no triangle mesh.");
   }
-  const positions = floatsFrom(position.bytes);
-  const index = readView(indexIndex);
-  const count = index.accessor.count ?? 0;
-  let indices: Uint32Array;
-  if (index.accessor.componentType === 5125) {
-    indices = uintsFrom(index.bytes, count);
-  } else if (index.accessor.componentType === 5123) {
-    const copy = Buffer.alloc(index.bytes.length);
-    index.bytes.copy(copy);
-    indices = new Uint32Array(new Uint16Array(copy.buffer, copy.byteOffset, count));
-  } else {
-    throw new Error("That 3D model could not be read.");
+  const index = readAccessor(json, bin, indexIndex);
+  if (index.accessor.type !== "SCALAR") throw new Error("Hunyuan returned a GLB with no triangle mesh.");
+  return { positions: floatsFrom(position.bytes), indices: indicesFrom(index.accessor, index.bytes) };
+}
+
+function mergeMeshes(parts: TriangleMesh[]): TriangleMesh {
+  if (parts.length === 1) return parts[0];
+  const positions = new Float32Array(parts.reduce((sum, part) => sum + part.positions.length, 0));
+  const indices = new Uint32Array(parts.reduce((sum, part) => sum + part.indices.length, 0));
+  let vertexCursor = 0;
+  let indexCursor = 0;
+  let baseVertex = 0;
+  for (const part of parts) {
+    positions.set(part.positions, vertexCursor);
+    for (let index = 0; index < part.indices.length; index += 1) {
+      indices[indexCursor + index] = part.indices[index] + baseVertex;
+    }
+    vertexCursor += part.positions.length;
+    indexCursor += part.indices.length;
+    baseVertex += part.positions.length / 3;
   }
   return { positions, indices };
+}
+
+/**
+ * Read every POSITION primitive in an embedded GLB.
+ * An image or any other file is an error. This does not invent a mesh.
+ */
+export function decodeGlb(bytes: Buffer): TriangleMesh {
+  if (bytes.length < 20 || bytes.readUInt32LE(0) !== 0x46546c67) throw new Error(notAMesh(bytes));
+  const jsonLength = bytes.readUInt32LE(12);
+  const jsonType = bytes.readUInt32LE(16);
+  const jsonEnd = 20 + jsonLength;
+  if (jsonType !== 0x4e4f534a || jsonEnd + 8 > bytes.length) throw new Error(notAMesh(bytes));
+  let json: GltfDocument;
+  try {
+    json = JSON.parse(bytes.subarray(20, jsonEnd).toString("utf8")) as GltfDocument;
+  } catch {
+    throw new Error(notAMesh(bytes));
+  }
+  const binLength = bytes.readUInt32LE(jsonEnd);
+  const binType = bytes.readUInt32LE(jsonEnd + 4);
+  const binStart = jsonEnd + 8;
+  if (binType !== 0x004e4942 || binStart + binLength > bytes.length) {
+    throw new Error("Hunyuan returned a file that is not a GLB mesh.");
+  }
+  const bin = bytes.subarray(binStart, binStart + binLength);
+  const parts: TriangleMesh[] = [];
+  for (const mesh of json.meshes ?? []) {
+    for (const primitive of mesh.primitives ?? []) {
+      const part = readPrimitive(json, bin, primitive);
+      if (part && part.positions.length >= 9 && part.indices.length >= 3) parts.push(part);
+    }
+  }
+  if (parts.length === 0) throw new Error("Hunyuan returned a GLB with no triangle mesh.");
+  return mergeMeshes(parts);
 }
 
 function floatsFrom(view: Buffer): Float32Array {
   const copy = Buffer.alloc(view.length);
   view.copy(copy);
   return new Float32Array(copy.buffer, copy.byteOffset, copy.length / 4);
-}
-
-function uintsFrom(view: Buffer, count: number): Uint32Array {
-  const copy = Buffer.alloc(view.length);
-  view.copy(copy);
-  return new Uint32Array(copy.buffer, copy.byteOffset, count);
 }

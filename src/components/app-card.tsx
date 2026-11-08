@@ -256,7 +256,9 @@ export function AppCard({ app }: { app: CatalogApp }) {
             setNeed("Asking which frame shows the subject…");
             const sampled = await sampleSceneFrames(prepared.file, prepared.duration);
             if (token !== sceneToken.current) return;
-            const picked = await requestSubjectModel(sampled.frames, sampled.times);
+            const picked = await requestSubjectModel(sampled.frames, sampled.times, (message) => {
+              if (token === sceneToken.current) setNeed(message);
+            });
             if (token !== sceneToken.current) return;
             setScene(picked);
             setSceneState("ready");
@@ -730,7 +732,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
   const polygonValue = Number(controlValue(values, "polygons")) || SCENE_POLYGON_DEFAULT;
   const showScenePreview = app.kind === "reverse-3d" && scene && !active;
   const sceneCaption = scene
-    ? `Drag to orbit · ${scene.time.toFixed(1)}s · ${polygonCount > 0 ? `${polygonCount} polygons` : "mesh"}`
+    ? `${scene.mock ? "Mock preview, not a Hunyuan model. " : ""}Drag to orbit · ${scene.time.toFixed(1)}s · ${polygonCount > 0 ? `${polygonCount} polygons` : "mesh"}`
     : "Picking the subject…";
   const sceneView =
     app.kind === "reverse-3d" && scene ? (

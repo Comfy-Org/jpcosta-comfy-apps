@@ -9,6 +9,8 @@ import { POST } from "../src/app/api/run/[app]/route";
 import { POST as postSubject } from "../src/app/api/reverse-3d/subject/route";
 import { getApp } from "../src/lib/config";
 import { blockFigureMesh, decodeGlb, encodeGlb, reduceMesh } from "../src/lib/mesh-reduce";
+import { decidePublicRequest, isPublicApp } from "../src/lib/public-surface";
+import { signAssetId, verifyAssetSignature } from "../src/lib/signing";
 import { buildBoxMesh, orbitFromDrag, projectPoint, SCENE_CLAY, SCENE_DEFAULT_PITCH, SCENE_DEFAULT_YAW, sceneMvp } from "../src/lib/scene-mesh";
 import { getDeployment } from "../src/lib/deployments";
 import {
@@ -19,7 +21,10 @@ import {
   buildHunyuanWorkflow,
   buildPickWorkflow,
   comboOptions,
+  cutoutAssetToken,
   parseSubjectChoice,
+  selectMeshOutput,
+  selectTextOutput,
   MESH_KEEP_FRACTION,
 } from "../src/lib/subject-pipeline";
 import { durationOverCap, readContainerDurationSeconds } from "../src/lib/video-duration";
@@ -87,6 +92,26 @@ function webmClusters(stamps: Array<{ timestamp: number; blockRel?: number }>): 
   ]);
 }
 
+function glbDocument(json: Record<string, unknown>, bin: Buffer): Buffer {
+  const jsonBytes = Buffer.from(JSON.stringify(json));
+  const jsonPad = (4 - (jsonBytes.length % 4)) % 4;
+  const jsonChunk = Buffer.concat([jsonBytes, Buffer.alloc(jsonPad, 0x20)]);
+  const binPad = (4 - (bin.length % 4)) % 4;
+  const binChunk = Buffer.concat([bin, Buffer.alloc(binPad, 0)]);
+  const total = 12 + 8 + jsonChunk.length + 8 + binChunk.length;
+  const header = Buffer.alloc(12);
+  header.writeUInt32LE(0x46546c67, 0);
+  header.writeUInt32LE(2, 4);
+  header.writeUInt32LE(total, 8);
+  const jsonHeader = Buffer.alloc(8);
+  jsonHeader.writeUInt32LE(jsonChunk.length, 0);
+  jsonHeader.writeUInt32LE(0x4e4f534a, 4);
+  const binHeader = Buffer.alloc(8);
+  binHeader.writeUInt32LE(binChunk.length, 0);
+  binHeader.writeUInt32LE(0x004e4942, 4);
+  return Buffer.concat([header, jsonHeader, jsonChunk, binHeader, binChunk]);
+}
+
 function renderClip(seconds: number, ext: "mp4" | "webm"): Buffer {
   const dir = mkdtempSync(path.join(tmpdir(), "reverse-scene-"));
   const file = path.join(dir, `clip.${ext}`);
@@ -134,10 +159,25 @@ async function main() {
     assert.deepEqual(pick["20"]?.inputs[`model.images.image_${index}`], [String(index), 0]);
   }
   assert.match(String(pick["20"]?.inputs["model.prompt"]), /main subject/);
+  assert.equal(pick["20"]?.inputs["model.thinking_level"], "MINIMAL");
+  assert.equal(pick["20"]?.inputs["model.max_output_tokens"], 1024);
   assert.equal(parseSubjectChoice("frame: 4\nsubject: the armored figure", 12).frame, 3);
   assert.equal(parseSubjectChoice("frame: 4\nsubject: the armored figure", 12).subject, "the armored figure");
+  assert.equal(parseSubjectChoice("Sure.\nframe: 2\nsubject: red mug\nThanks", 4).subject, "red mug");
   assert.throws(() => parseSubjectChoice("a person in the middle", 12), /choose a frame/);
   assert.throws(() => parseSubjectChoice("frame: 13\nsubject: someone", 12), /not sampled/);
+  assert.equal(selectMeshOutput([{ id: "png", name: "preview.png" }, { id: "mesh", name: "hunyuan.glb" }])?.id, "mesh");
+  assert.equal(selectMeshOutput([{ id: "png", name: "preview.png" }]), null);
+  assert.equal(selectMeshOutput([{ id: "mesh", name: "GLB" }])?.id, "mesh");
+  assert.equal(selectTextOutput([{ id: "png", name: "frame.png" }, { id: "text", name: "subject_00001_.txt" }])?.id, "text");
+  const cutoutId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const cutoutToken = cutoutAssetToken(cutoutId);
+  assert.equal(verifyAssetSignature(cutoutToken, signAssetId(cutoutToken)), true);
+  assert.equal(isPublicApp("reverse-3d-cutout"), false);
+  assert.equal(decidePublicRequest("GET", `/api/outputs/${cutoutToken}`).action, "deny");
+  assert.equal(decidePublicRequest("GET", `/api/jobs/background-removal~${cutoutId}`).action, "deny");
+  assert.equal(decidePublicRequest("GET", "/api/reverse-3d/subject").action, "allow");
+  assert.equal(decidePublicRequest("POST", "/api/run/background-removal").action, "deny");
 
   assert.deepEqual(
     comboOptions(
@@ -183,6 +223,91 @@ async function main() {
   assert.ok(reduced.reducedFaces < reduced.sourceFaces);
   const roundTrip = decodeGlb(encodeGlb(reduced));
   assert.equal(roundTrip.indices.length, reduced.indices.length);
+  const padded = Buffer.concat([Buffer.alloc(12), Buffer.from(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]).buffer)]);
+  const offsetGlb = glbDocument(
+    {
+      asset: { version: "2.0" },
+      buffers: [{ byteLength: padded.length + 3 }],
+      bufferViews: [
+        { buffer: 0, byteOffset: 0, byteLength: padded.length },
+        { buffer: 0, byteOffset: padded.length, byteLength: 3 },
+      ],
+      accessors: [
+        { bufferView: 0, byteOffset: 12, componentType: 5126, count: 3, type: "VEC3" },
+        { bufferView: 1, componentType: 5121, count: 3, type: "SCALAR" },
+      ],
+      meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
+    },
+    Buffer.concat([padded, Buffer.from([0, 1, 2])]),
+  );
+  const offsetMesh = decodeGlb(offsetGlb);
+  assert.equal(offsetMesh.positions[3], 1);
+  assert.deepEqual(Array.from(offsetMesh.indices), [0, 1, 2]);
+  const strideBin = Buffer.alloc(16 * 3 + 12);
+  const strideFloats = [0, 0, 0, 2, 0, 0, 0, 3, 0];
+  for (let index = 0; index < 3; index += 1) {
+    strideBin.writeFloatLE(strideFloats[index * 3] ?? 0, index * 16);
+    strideBin.writeFloatLE(strideFloats[index * 3 + 1] ?? 0, index * 16 + 4);
+    strideBin.writeFloatLE(strideFloats[index * 3 + 2] ?? 0, index * 16 + 8);
+  }
+  strideBin.writeUInt32LE(0, 48);
+  strideBin.writeUInt32LE(1, 52);
+  strideBin.writeUInt32LE(2, 56);
+  const strideMesh = decodeGlb(
+    glbDocument(
+      {
+        asset: { version: "2.0" },
+        buffers: [{ byteLength: strideBin.length }],
+        bufferViews: [
+          { buffer: 0, byteOffset: 0, byteLength: 48, byteStride: 16 },
+          { buffer: 0, byteOffset: 48, byteLength: 12 },
+        ],
+        accessors: [
+          { bufferView: 0, componentType: 5126, count: 3, type: "VEC3" },
+          { bufferView: 1, componentType: 5125, count: 3, type: "SCALAR" },
+        ],
+        meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
+      },
+      strideBin,
+    ),
+  );
+  assert.equal(strideMesh.positions[3], 2);
+  assert.equal(strideMesh.positions[7], 3);
+  const first = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+  const second = new Float32Array([2, 0, 0, 3, 0, 0, 2, 1, 0]);
+  const both = Buffer.concat([Buffer.from(first.buffer), Buffer.from(second.buffer), Buffer.from(new Uint16Array([0, 1, 2, 0, 1, 2]).buffer)]);
+  const merged = decodeGlb(
+    glbDocument(
+      {
+        asset: { version: "2.0" },
+        buffers: [{ byteLength: both.length }],
+        bufferViews: [
+          { buffer: 0, byteOffset: 0, byteLength: 36 },
+          { buffer: 0, byteOffset: 36, byteLength: 36 },
+          { buffer: 0, byteOffset: 72, byteLength: 6 },
+          { buffer: 0, byteOffset: 78, byteLength: 6 },
+        ],
+        accessors: [
+          { bufferView: 0, componentType: 5126, count: 3, type: "VEC3" },
+          { bufferView: 1, componentType: 5126, count: 3, type: "VEC3" },
+          { bufferView: 2, componentType: 5123, count: 3, type: "SCALAR" },
+          { bufferView: 3, componentType: 5123, count: 3, type: "SCALAR" },
+        ],
+        meshes: [
+          {
+            primitives: [
+              { attributes: { POSITION: 0 }, indices: 2 },
+              { attributes: { POSITION: 1 }, indices: 3 },
+            ],
+          },
+        ],
+      },
+      both,
+    ),
+  );
+  assert.equal(merged.positions.length / 3, 6);
+  assert.deepEqual(Array.from(merged.indices), [0, 1, 2, 3, 4, 5]);
+  assert.throws(() => decodeGlb(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), /image, not a 3D mesh/);
 
   const steps = [64, 256, 768, 2048, 4096].map((target) => buildBoxMesh(reduced.positions, reduced.indices, target));
   for (let index = 1; index < steps.length; index += 1) {
@@ -326,6 +451,7 @@ async function main() {
     sourceFaces?: number;
     reducedFaces?: number;
     positions?: number[];
+    mock?: boolean;
     pick?: Record<string, { class_type?: string }>;
     mesh?: Record<string, { class_type?: string; inputs?: Record<string, unknown> }>;
     cutout?: Record<string, { class_type?: string; inputs?: Record<string, unknown> }>;
@@ -341,6 +467,20 @@ async function main() {
   assert.equal(subjectBody.cutout?.["2"]?.inputs?.bg_removal_name, "birefnet.safetensors");
   assert.ok((subjectBody.reducedFaces ?? 0) < (subjectBody.sourceFaces ?? 0));
   assert.ok((subjectBody.positions?.length ?? 0) > 9);
+  assert.equal(subjectBody.mock, true);
+
+  const cutoutForm = new FormData();
+  cutoutForm.set("step", "cutout");
+  cutoutForm.append("frame", new File([new Uint8Array(png)], "frame_1.jpg", { type: "image/jpeg" }));
+  const cutoutResponse = await postSubject(new Request("http://localhost/api/reverse-3d/subject", { method: "POST", body: cutoutForm }));
+  const cutoutBody = (await cutoutResponse.json()) as { mock?: boolean; jobId?: string; positions?: number[]; error?: { message?: string } };
+  assert.equal(cutoutResponse.status, 200, JSON.stringify(cutoutBody.error));
+  assert.equal(cutoutBody.mock, true);
+  assert.equal(cutoutBody.jobId, undefined);
+  assert.equal(JSON.stringify(cutoutBody).includes("background-removal"), false);
+  const routeSource = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/app/api/reverse-3d/subject/route.ts"), "utf8");
+  assert.equal(routeSource.includes("waitForCutout"), false);
+  assert.equal(routeSource.includes("40_000"), false);
 
   const app = getApp("reverse-3d");
   assert.ok(app);

@@ -1,4 +1,4 @@
-import { parseSubjectChoice, SUBJECT_FRAME_CAP } from "@/lib/subject-pipeline";
+import { parseSubjectChoice, selectMeshOutput, selectTextOutput, SUBJECT_FRAME_CAP } from "@/lib/subject-pipeline";
 import { loadVideoElement, seekTo } from "@/lib/video-client";
 
 export const SCENE_SAMPLE_LONG_SIDE = 512;
@@ -10,6 +10,8 @@ export type SceneModel = {
   reducedFaces: number;
   time: number;
   subject: string;
+  /** Set only when the server returned the sample block figure. Not a Hunyuan result. */
+  mock?: boolean;
 };
 
 type SubjectPayload = {
@@ -23,7 +25,10 @@ type SubjectPayload = {
   reducedFaces?: number;
   positions?: number[];
   indices?: number[];
-  error?: { message?: string };
+  status?: string;
+  cutout?: string;
+  sig?: string;
+  error?: { code?: string; message?: string } | string;
 };
 
 type JobPayload = {
@@ -86,6 +91,7 @@ function asModel(payload: SubjectPayload, fallbackTime: number): SceneModel {
     reducedFaces: payload.reducedFaces ?? 0,
     time: payload.time ?? fallbackTime,
     subject: payload.subject,
+    mock: payload.mock === true,
   };
 }
 
@@ -108,41 +114,106 @@ async function pollJob(jobId: string): Promise<JobPayload> {
   throw new Error("The 3D subject is taking too long.");
 }
 
-async function postFrames(step: "pick" | "mesh", frames: Blob[], times: number[]): Promise<SubjectPayload> {
+function errorMessage(payload: SubjectPayload, fallback: string): string {
+  if (typeof payload.error === "string" && payload.error) return payload.error;
+  if (payload.error && typeof payload.error === "object" && payload.error.message) return payload.error.message;
+  return fallback;
+}
+
+const COLD_START = new Set(["deployment_not_ready", "timeout"]);
+
+async function postSubject(form: FormData, onStatus?: (message: string) => void): Promise<SubjectPayload> {
+  const started = Date.now();
+  for (;;) {
+    const response = await fetch("/api/reverse-3d/subject", { method: "POST", body: form });
+    const payload = await readJson<SubjectPayload>(response);
+    const code = payload.error && typeof payload.error === "object" ? payload.error.code : undefined;
+    if (!response.ok && code && COLD_START.has(code) && Date.now() - started < 3 * 60 * 1000) {
+      onStatus?.("The GPU worker is cold-starting. Waiting for it…");
+      await new Promise((resolve) => setTimeout(resolve, 15_000));
+      continue;
+    }
+    if (!response.ok) throw new Error(errorMessage(payload, "Could not build a 3D subject from that clip."));
+    return payload;
+  }
+}
+
+async function postFrames(
+  step: "pick" | "cutout",
+  frames: Blob[],
+  times: number[],
+  onStatus?: (message: string) => void,
+): Promise<SubjectPayload> {
   const form = new FormData();
   form.set("step", step);
   form.set("times", times.join(","));
   frames.forEach((frame, index) => form.append("frame", frame, `frame_${index + 1}.jpg`));
-  const response = await fetch("/api/reverse-3d/subject", { method: "POST", body: form });
-  const payload = await readJson<SubjectPayload>(response);
-  if (!response.ok) throw new Error(payload.error?.message || "Could not build a 3D subject from that clip.");
-  return payload;
+  return postSubject(form, onStatus);
+}
+
+async function pollCutout(jobId: string, onStatus?: (message: string) => void): Promise<{ cutout: string; sig: string }> {
+  const started = Date.now();
+  while (Date.now() - started < 12 * 60 * 1000) {
+    const response = await fetch(`/api/reverse-3d/subject?cutoutJob=${encodeURIComponent(jobId)}`, { cache: "no-store" });
+    const payload = await readJson<SubjectPayload>(response);
+    if (!response.ok) throw new Error(errorMessage(payload, "The background cut-out failed."));
+    if (payload.status === "succeeded" && payload.cutout && payload.sig) return { cutout: payload.cutout, sig: payload.sig };
+    if (payload.status === "failed" || payload.status === "canceled" || payload.status === "expired") {
+      throw new Error(errorMessage(payload, "The background cut-out failed."));
+    }
+    onStatus?.("Removing the background…");
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error("The background cut-out is taking too long.");
 }
 
 /**
- * Ask the subject workflow which frame to keep, then load the reduced mesh.
- * A mock server returns the mesh inline and does not call Comfy.
+ * Ask Gemini which frame to keep, cut that frame out, then load the Hunyuan mesh.
+ * A mock server returns the block figure on the first response and does not call Comfy.
+ * That figure is marked `mock` and is not a generated model.
  */
-export async function requestSubjectModel(frames: Blob[], times: number[]): Promise<SceneModel> {
-  const picked = await postFrames("pick", frames, times);
+export async function requestSubjectModel(
+  frames: Blob[],
+  times: number[],
+  onStatus?: (message: string) => void,
+): Promise<SceneModel> {
+  onStatus?.("Asking Gemini which frame shows the subject…");
+  const picked = await postFrames("pick", frames, times, onStatus);
   if (picked.positions) return asModel(picked, times[picked.frame ?? 0] ?? 0);
   if (!picked.jobId) throw new Error("Could not build a 3D subject from that clip.");
   const choiceJob = await pollJob(picked.jobId);
-  const textOutput = choiceJob.outputs?.[0];
+  const textOutput = selectTextOutput(choiceJob.outputs ?? []);
   if (!textOutput?.sig) throw new Error("The model did not choose a frame.");
   const textResponse = await fetch(`/api/outputs/${textOutput.id}?sig=${textOutput.sig}`);
   if (!textResponse.ok) throw new Error("The model did not choose a frame.");
   const choice = parseSubjectChoice(await textResponse.text(), frames.length);
-  const meshJob = await postFrames("mesh", [frames[choice.frame]], [times[choice.frame] ?? 0]);
+  const frame = frames[choice.frame];
+  if (!frame) throw new Error("The model chose a frame that was not sampled.");
+  onStatus?.("Removing the background…");
+  const cutoutJob = await postFrames("cutout", [frame], [times[choice.frame] ?? 0], onStatus);
+  if (cutoutJob.positions) {
+    return asModel({ ...cutoutJob, subject: choice.subject, time: times[choice.frame] ?? 0 }, times[choice.frame] ?? 0);
+  }
+  if (!cutoutJob.jobId || cutoutJob.jobId.includes("~")) {
+    throw new Error("Could not build a 3D subject from that clip.");
+  }
+  const cutout = await pollCutout(cutoutJob.jobId, onStatus);
+  onStatus?.("Building the 3D model…");
+  const hunyuanForm = new FormData();
+  hunyuanForm.set("step", "hunyuan");
+  hunyuanForm.set("cutout", cutout.cutout);
+  hunyuanForm.set("sig", cutout.sig);
+  const meshJob = await postSubject(hunyuanForm, onStatus);
   if (meshJob.positions) {
     return asModel({ ...meshJob, subject: choice.subject, time: times[choice.frame] ?? 0 }, times[choice.frame] ?? 0);
   }
   if (!meshJob.jobId) throw new Error("Could not build a 3D subject from that clip.");
   const done = await pollJob(meshJob.jobId);
-  const output = done.outputs?.find((item) => /\.glb$/i.test(item.name)) ?? done.outputs?.[0];
-  if (!output?.sig) throw new Error("Could not build a 3D subject from that clip.");
+  const output = selectMeshOutput(done.outputs ?? []);
+  if (!output?.sig) throw new Error("Hunyuan did not return a GLB mesh.");
+  onStatus?.("Loading the mesh…");
   const reducedResponse = await fetch(`/api/reverse-3d/subject?output=${encodeURIComponent(output.id)}&sig=${output.sig}`);
   const reduced = await readJson<SubjectPayload>(reducedResponse);
-  if (!reducedResponse.ok) throw new Error(reduced.error?.message || "Could not build a 3D subject from that clip.");
+  if (!reducedResponse.ok) throw new Error(errorMessage(reduced, "Could not build a 3D subject from that clip."));
   return asModel({ ...reduced, subject: choice.subject, time: times[choice.frame] ?? 0 }, times[choice.frame] ?? 0);
 }
