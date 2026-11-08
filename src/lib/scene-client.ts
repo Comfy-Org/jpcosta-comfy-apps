@@ -1,4 +1,4 @@
-import { measureElements, pickBusiestIndex } from "@/lib/scene-mesh";
+import { pickBestSubjectIndex, readSubject } from "@/lib/scene-mesh";
 import { loadVideoElement, seekTo } from "@/lib/video-client";
 
 export const SCENE_SAMPLE_LONG_SIDE = 96;
@@ -9,11 +9,13 @@ export type ScenePick = {
   width: number;
   height: number;
   time: number;
-  elements: number;
+  score: number;
+  rivals: number;
+  clear: boolean;
 };
 
 /**
- * Sample the accepted clip and keep the frame with the most separate regions.
+ * Sample the accepted clip and keep the frame whose main subject reads best.
  * `duration` is the already-capped length from the upload prep.
  */
 export async function pickSceneFrame(file: File, duration: number): Promise<ScenePick> {
@@ -41,19 +43,21 @@ export async function pickSceneFrame(file: File, duration: number): Promise<Scen
       await seekTo(video, time);
       ctx.drawImage(video, 0, 0, width, height);
       const image = ctx.getImageData(0, 0, width, height);
-      const measured = measureElements(image.data, width, height);
+      const read = readSubject(image.data, width, height);
       frames.push({
         pixels: new Uint8ClampedArray(image.data),
         width,
         height,
         time,
-        elements: measured.elementCount,
+        score: read.score,
+        rivals: read.rivals,
+        clear: read.clear,
       });
     }
     video.pause();
     video.removeAttribute("src");
     video.load();
-    const picked = frames[pickBusiestIndex(frames.map((frame) => frame.elements))];
+    const picked = frames[pickBestSubjectIndex(frames.map((frame) => frame.score))];
     if (!picked) throw new Error("Could not read that video.");
     return picked;
   } finally {

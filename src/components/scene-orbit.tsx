@@ -34,6 +34,9 @@ type GlState = {
   idx: WebGLBuffer;
   uMvp: WebGLUniformLocation;
   uNormal: WebGLUniformLocation;
+  lineProgram: WebGLProgram;
+  linePos: WebGLBuffer;
+  lineMvp: WebGLUniformLocation;
 };
 
 const VERT = `
@@ -57,12 +60,41 @@ varying vec3 vColor;
 varying vec3 vNormal;
 void main() {
   vec3 n = normalize(vNormal);
-  vec3 light = normalize(vec3(0.28, 0.72, 0.62));
-  float lambert = max(abs(dot(n, light)), 0.0);
-  float shade = 0.4 + 0.6 * lambert;
+  vec3 key = normalize(vec3(0.32, 0.78, 0.48));
+  vec3 fill = normalize(vec3(-0.55, 0.25, 0.35));
+  float shade = clamp(0.74 + 0.28 * max(dot(n, key), 0.0) + 0.08 * max(dot(n, fill), 0.0), 0.0, 1.15);
   gl_FragColor = vec4(vColor * shade, 1.0);
 }
 `;
+
+const LINE_VERT = `
+attribute vec3 aPos;
+uniform mat4 uMvp;
+void main() {
+  gl_Position = uMvp * vec4(aPos, 1.0);
+}
+`;
+
+const LINE_FRAG = `
+precision mediump float;
+void main() {
+  gl_FragColor = vec4(0.45, 0.46, 0.49, 1.0);
+}
+`;
+
+function floorPositions(floorY: number): Float32Array {
+  const y = floorY - 0.015;
+  const extent = 2.2;
+  const step = 0.28;
+  const coords: number[] = [];
+  for (let x = -extent; x <= extent + 0.001; x += step) {
+    coords.push(x, y, -extent, x, y, extent);
+  }
+  for (let z = -extent; z <= extent + 0.001; z += step) {
+    coords.push(-extent, y, z, extent, y, z);
+  }
+  return new Float32Array(coords);
+}
 
 function shader(gl: WebGLRenderingContext, type: number, source: string): WebGLShader {
   const item = gl.createShader(type);
@@ -78,7 +110,7 @@ function shader(gl: WebGLRenderingContext, type: number, source: string): WebGLS
 }
 
 function createGl(canvas: HTMLCanvasElement): GlState | null {
-  const gl = canvas.getContext("webgl", { alpha: false, antialias: true, preserveDrawingBuffer: false });
+  const gl = canvas.getContext("webgl", { alpha: false, antialias: true, preserveDrawingBuffer: true });
   if (!gl) return null;
   const program = gl.createProgram();
   if (!program) return null;
@@ -93,13 +125,26 @@ function createGl(canvas: HTMLCanvasElement): GlState | null {
   gl.deleteShader(vs);
   gl.deleteShader(fs);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
+  const lineProgram = gl.createProgram();
+  if (!lineProgram) return null;
+  const lineVs = shader(gl, gl.VERTEX_SHADER, LINE_VERT);
+  const lineFs = shader(gl, gl.FRAGMENT_SHADER, LINE_FRAG);
+  gl.attachShader(lineProgram, lineVs);
+  gl.attachShader(lineProgram, lineFs);
+  gl.bindAttribLocation(lineProgram, 0, "aPos");
+  gl.linkProgram(lineProgram);
+  gl.deleteShader(lineVs);
+  gl.deleteShader(lineFs);
+  if (!gl.getProgramParameter(lineProgram, gl.LINK_STATUS)) return null;
   const pos = gl.createBuffer();
   const nor = gl.createBuffer();
   const col = gl.createBuffer();
   const idx = gl.createBuffer();
+  const linePos = gl.createBuffer();
   const uMvp = gl.getUniformLocation(program, "uMvp");
   const uNormal = gl.getUniformLocation(program, "uNormal");
-  if (!pos || !nor || !col || !idx || !uMvp || !uNormal) return null;
+  const lineMvp = gl.getUniformLocation(lineProgram, "uMvp");
+  if (!pos || !nor || !col || !idx || !linePos || !uMvp || !uNormal || !lineMvp) return null;
   gl.useProgram(program);
   gl.bindBuffer(gl.ARRAY_BUFFER, pos);
   gl.enableVertexAttribArray(0);
@@ -110,7 +155,7 @@ function createGl(canvas: HTMLCanvasElement): GlState | null {
   gl.bindBuffer(gl.ARRAY_BUFFER, col);
   gl.enableVertexAttribArray(2);
   gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
-  return { gl, program, pos, nor, col, idx, uMvp, uNormal };
+  return { gl, program, pos, nor, col, idx, uMvp, uNormal, lineProgram, linePos, lineMvp };
 }
 
 function uploadMesh(gls: GlState, mesh: SceneMesh) {
@@ -152,6 +197,7 @@ export const SceneOrbit = forwardRef<SceneOrbitHandle, Props>(function SceneOrbi
   const indexCount = useRef(0);
   const yaw = useRef(SCENE_DEFAULT_YAW);
   const pitch = useRef(SCENE_DEFAULT_PITCH);
+  const floorRef = useRef<Float32Array>(floorPositions(-0.8));
   const drag = useRef<{ x: number; y: number; yaw: number; pitch: number } | null>(null);
   const onCountRef = useRef(onPolygonCount);
   onCountRef.current = onPolygonCount;
@@ -165,14 +211,35 @@ export const SceneOrbit = forwardRef<SceneOrbitHandle, Props>(function SceneOrbi
     fitCanvas(canvas);
     const { gl } = gls;
     gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.clearColor(247 / 255, 246 / 255, 243 / 255, 1);
+    gl.clearColor(0.165, 0.165, 0.176, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
+    const mvp = sceneMvp(yaw.current, pitch.current, canvas.width / canvas.height);
     gl.useProgram(gls.program);
-    gl.uniformMatrix4fv(gls.uMvp, false, sceneMvp(yaw.current, pitch.current, canvas.width / canvas.height));
+    gl.uniformMatrix4fv(gls.uMvp, false, mvp);
     gl.uniformMatrix3fv(gls.uNormal, false, mat3FromMat4(sceneViewMatrix(yaw.current, pitch.current)));
+    gl.bindBuffer(gl.ARRAY_BUFFER, gls.pos);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gls.nor);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gls.col);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gls.idx);
     gl.drawElements(gl.TRIANGLES, indexCount.current, gl.UNSIGNED_SHORT, 0);
+    gl.disable(gl.CULL_FACE);
+    gl.useProgram(gls.lineProgram);
+    gl.uniformMatrix4fv(gls.lineMvp, false, mvp);
+    gl.bindBuffer(gl.ARRAY_BUFFER, gls.linePos);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.disableVertexAttribArray(1);
+    gl.disableVertexAttribArray(2);
+    gl.drawArrays(gl.LINES, 0, floorRef.current.length / 3);
   };
 
   useImperativeHandle(ref, () => ({
@@ -218,12 +285,13 @@ export const SceneOrbit = forwardRef<SceneOrbitHandle, Props>(function SceneOrbi
     if (!gls) return;
     glRef.current = gls;
     if (meshRef.current) uploadMesh(gls, meshRef.current);
+    gls.gl.bindBuffer(gls.gl.ARRAY_BUFFER, gls.linePos);
+    gls.gl.bufferData(gls.gl.ARRAY_BUFFER, floorRef.current, gls.gl.DYNAMIC_DRAW);
     const observer = new ResizeObserver(() => drawRef.current());
     observer.observe(canvas);
     drawRef.current();
     return () => {
       observer.disconnect();
-      gls?.gl.getExtension("WEBGL_lose_context")?.loseContext();
       glRef.current = null;
     };
   }, []);
@@ -232,6 +300,12 @@ export const SceneOrbit = forwardRef<SceneOrbitHandle, Props>(function SceneOrbi
     const mesh = buildSceneMesh(pixels, width, height, polygons);
     meshRef.current = mesh;
     indexCount.current = mesh.indices.length;
+    floorRef.current = floorPositions(mesh.floorY);
+    const lines = glRef.current;
+    if (lines) {
+      lines.gl.bindBuffer(lines.gl.ARRAY_BUFFER, lines.linePos);
+      lines.gl.bufferData(lines.gl.ARRAY_BUFFER, floorRef.current, lines.gl.DYNAMIC_DRAW);
+    }
     const gls = glRef.current;
     if (gls) uploadMesh(gls, mesh);
     onCountRef.current?.(mesh.polygonCount);
@@ -242,7 +316,7 @@ export const SceneOrbit = forwardRef<SceneOrbitHandle, Props>(function SceneOrbi
     <canvas
       ref={canvasRef}
       className="scene-orbit"
-      aria-label="3D scene. Drag to orbit."
+      aria-label="3D subject. Drag to orbit."
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
         drag.current = { x: event.clientX, y: event.clientY, yaw: yaw.current, pitch: pitch.current };

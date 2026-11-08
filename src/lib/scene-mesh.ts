@@ -1,108 +1,169 @@
 /**
- * Browser-side scene mesh for Reverse 3D.
+ * Browser-side subject mesh for Reverse 3D.
  *
- * The frame score counts separate color regions. The mesh is a colored relief
- * of that still: one grid, displaced by those regions. Polygon changes only
- * rebuild this grid. Nothing here talks to a server.
+ * The frame score looks for one foreground object that stands apart from the
+ * border color. The mesh is an untextured clay volume of that silhouette only:
+ * front and back shells inflated by distance from the outline. The background
+ * is not in the mesh. Polygon changes only rebuild this volume.
  */
 
 export const SCENE_POLYGON_MIN = 64;
 export const SCENE_POLYGON_MAX = 4096;
 export const SCENE_POLYGON_DEFAULT = 768;
 
-export const SCENE_DEFAULT_YAW = 0.7;
-export const SCENE_DEFAULT_PITCH = 0.38;
+export const SCENE_DEFAULT_YAW = 1.05;
+export const SCENE_DEFAULT_PITCH = 0.22;
 export const SCENE_ORBIT_RADIUS = 2.35;
 export const SCENE_DRAG_YAW = 0.008;
 export const SCENE_DRAG_PITCH = 0.008;
 export const SCENE_PITCH_MIN = -1.05;
 export const SCENE_PITCH_MAX = 1.05;
 
-const MERGE_DISTANCE = 42;
-const MIN_AREA_RATIO = 0.012;
+/** Untextured clay. The still's colors are not copied onto the mesh. */
+export const SCENE_CLAY: readonly [number, number, number] = [0.93, 0.91, 0.87];
+
+const SUBJECT_MIN_RATIO = 0.015;
+const CLEAR_SCORE = 0.35;
 
 export type SceneMesh = {
   positions: Float32Array;
   normals: Float32Array;
   colors: Float32Array;
   indices: Uint16Array;
-  /** Triangle count. This is the number the polygon slider reports. */
+  /** Triangle count of the subject. The floor grid is not included. */
   polygonCount: number;
+  /** World height of the ground plane under the subject's feet. */
+  floorY: number;
 };
 
-type Measured = {
-  comp: Int32Array;
-  areas: number[];
-  elementCount: number;
+export type SubjectRead = {
+  mask: Uint8Array;
+  score: number;
+  areaRatio: number;
+  /** Foreground objects large enough to count, including the one that was kept. */
+  rivals: number;
+  clear: boolean;
 };
 
-function quantize(r: number, g: number, b: number): number {
-  const y = (r * 2 + g * 3 + b) / 6;
-  const cb = Math.max(0, Math.min(255, b - y + 128));
-  const cr = Math.max(0, Math.min(255, r - y + 128));
-  const yq = Math.min(3, Math.floor(y / 64));
-  const cbq = Math.min(3, Math.floor(cb / 64));
-  const crq = Math.min(3, Math.floor(cr / 64));
-  return yq * 16 + cbq * 4 + crq;
+type Vec3 = [number, number, number];
+
+function rgbAt(pixels: Uint8ClampedArray | Uint8Array, index: number): [number, number, number] {
+  const offset = index * 4;
+  return [pixels[offset] ?? 0, pixels[offset + 1] ?? 0, pixels[offset + 2] ?? 0];
 }
 
-function colorDistance(ar: number, ag: number, ab: number, br: number, bg: number, bb: number): number {
-  const dr = ar - br;
-  const dg = ag - bg;
-  const db = ab - bb;
-  return dr * dr + dg * dg + db * db;
+function colorDistance(a: [number, number, number], b: [number, number, number]): number {
+  const dr = a[0] - b[0];
+  const dg = a[1] - b[1];
+  const db = a[2] - b[2];
+  return Math.hypot(dr, dg, db);
 }
 
-/** Earlier index wins a tie, so the first equally busy frame stays chosen. */
-export function pickBusiestIndex(scores: readonly number[]): number {
-  let best = 0;
-  for (let index = 1; index < scores.length; index += 1) {
-    if (scores[index] > scores[best]) best = index;
-  }
-  return best;
+function median(values: Float64Array): number {
+  if (values.length === 0) return 0;
+  const sorted = Float64Array.from(values).sort();
+  return sorted[Math.floor(sorted.length / 2)] ?? 0;
+}
+
+function areaTerm(ratio: number): number {
+  const peak = 0.24;
+  const spread = 0.16;
+  const bell = Math.exp(-((ratio - peak) ** 2) / (2 * spread * spread));
+  if (ratio < 0.05 || ratio > 0.7) return bell * 0.15;
+  return bell;
 }
 
 /**
- * How many separate regions a frame has.
- * Pixels are quantized, flood-filled, then touching regions of a similar mean
- * color are merged. Specks under 1.2% of the frame are dropped.
+ * Separate the main subject from a still.
+ * Border pixels close to the border's own color are the background and flood
+ * inward. Everything they cannot reach is foreground. The largest foreground
+ * object is the subject; the rest is dropped. A tie between frames is not
+ * decided here.
  */
-export function measureElements(pixels: Uint8ClampedArray | Uint8Array, width: number, height: number): Measured {
+export function readSubject(pixels: Uint8ClampedArray | Uint8Array, width: number, height: number): SubjectRead {
   const count = width * height;
-  const labels = new Int32Array(count);
-  for (let index = 0; index < count; index += 1) {
-    const offset = index * 4;
-    labels[index] = quantize(pixels[offset] ?? 0, pixels[offset + 1] ?? 0, pixels[offset + 2] ?? 0);
+  const empty = (): SubjectRead => ({
+    mask: new Uint8Array(count),
+    score: 0,
+    areaRatio: 0,
+    rivals: 0,
+    clear: false,
+  });
+  if (width < 2 || height < 2 || pixels.length < count * 4) return empty();
+
+  const border: number[] = [];
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (x === 0 || y === 0 || x + 1 === width || y + 1 === height) border.push(y * width + x);
+    }
+  }
+  const reds = new Float64Array(border.length);
+  const greens = new Float64Array(border.length);
+  const blues = new Float64Array(border.length);
+  for (let index = 0; index < border.length; index += 1) {
+    const [r, g, b] = rgbAt(pixels, border[index] ?? 0);
+    reds[index] = r;
+    greens[index] = g;
+    blues[index] = b;
+  }
+  const background: [number, number, number] = [median(reds), median(greens), median(blues)];
+  const spread = new Float64Array(border.length);
+  for (let index = 0; index < border.length; index += 1) {
+    spread[index] = colorDistance(rgbAt(pixels, border[index] ?? 0), background);
+  }
+  const sortedSpread = Float64Array.from(spread).sort();
+  const typical = sortedSpread[Math.floor(sortedSpread.length * 0.75)] ?? 0;
+  const threshold = Math.max(28, Math.min(80, typical + 24));
+
+  const isBackground = new Uint8Array(count);
+  const queue = new Int32Array(count);
+  let head = 0;
+  let tail = 0;
+  const push = (index: number) => {
+    if (isBackground[index]) return;
+    if (colorDistance(rgbAt(pixels, index), background) > threshold) return;
+    isBackground[index] = 1;
+    queue[tail] = index;
+    tail += 1;
+  };
+  for (const index of border) push(index);
+  while (head < tail) {
+    const pixel = queue[head] ?? 0;
+    head += 1;
+    const x = pixel % width;
+    const y = (pixel - x) / width;
+    if (x > 0) push(pixel - 1);
+    if (x + 1 < width) push(pixel + 1);
+    if (y > 0) push(pixel - width);
+    if (y + 1 < height) push(pixel + width);
   }
 
   const comp = new Int32Array(count);
   comp.fill(-1);
-  const sumR: number[] = [];
-  const sumG: number[] = [];
-  const sumB: number[] = [];
   const areas: number[] = [];
-  const stack: number[] = [];
+  const touchLeft: boolean[] = [];
+  const touchRight: boolean[] = [];
+  const touchTop: boolean[] = [];
   let next = 0;
+  const stack: number[] = [];
   for (let start = 0; start < count; start += 1) {
-    if (comp[start] !== -1) continue;
-    const label = labels[start];
+    if (isBackground[start] || comp[start] !== -1) continue;
     const id = next;
     next += 1;
     areas[id] = 0;
-    sumR[id] = 0;
-    sumG[id] = 0;
-    sumB[id] = 0;
+    touchLeft[id] = false;
+    touchRight[id] = false;
+    touchTop[id] = false;
     comp[start] = id;
     stack.push(start);
     while (stack.length > 0) {
       const pixel = stack.pop() ?? 0;
-      areas[id] += 1;
-      const offset = pixel * 4;
-      sumR[id] += pixels[offset] ?? 0;
-      sumG[id] += pixels[offset + 1] ?? 0;
-      sumB[id] += pixels[offset + 2] ?? 0;
+      areas[id] = (areas[id] ?? 0) + 1;
       const x = pixel % width;
       const y = (pixel - x) / width;
+      if (x === 0) touchLeft[id] = true;
+      if (x + 1 === width) touchRight[id] = true;
+      if (y === 0) touchTop[id] = true;
       const neighbors = [
         x > 0 ? pixel - 1 : -1,
         x + 1 < width ? pixel + 1 : -1,
@@ -110,113 +171,100 @@ export function measureElements(pixels: Uint8ClampedArray | Uint8Array, width: n
         y + 1 < height ? pixel + width : -1,
       ];
       for (const neighbor of neighbors) {
-        if (neighbor < 0 || comp[neighbor] !== -1 || labels[neighbor] !== label) continue;
+        if (neighbor < 0 || isBackground[neighbor] || comp[neighbor] !== -1) continue;
         comp[neighbor] = id;
         stack.push(neighbor);
       }
     }
   }
 
-  const parent = areas.map((_, index) => index);
-  const find = (id: number): number => {
-    let cursor = id;
-    while (parent[cursor] !== cursor) {
-      parent[cursor] = parent[parent[cursor] ?? cursor] ?? cursor;
-      cursor = parent[cursor] ?? cursor;
-    }
-    return cursor;
-  };
-  const unite = (a: number, b: number) => {
-    const ra = find(a);
-    const rb = find(b);
-    if (ra !== rb) parent[rb] = ra;
-  };
-  const limit = MERGE_DISTANCE * MERGE_DISTANCE;
-  const similar = (a: number, b: number) => {
-    const areaA = areas[a] || 1;
-    const areaB = areas[b] || 1;
-    return (
-      colorDistance(
-        (sumR[a] ?? 0) / areaA,
-        (sumG[a] ?? 0) / areaA,
-        (sumB[a] ?? 0) / areaA,
-        (sumR[b] ?? 0) / areaB,
-        (sumG[b] ?? 0) / areaB,
-        (sumB[b] ?? 0) / areaB,
-      ) < limit
-    );
-  };
+  const minArea = Math.max(8, Math.round(count * SUBJECT_MIN_RATIO));
+  let chosen = -1;
+  let rivals = 0;
+  for (let id = 0; id < areas.length; id += 1) {
+    if ((areas[id] ?? 0) < minArea) continue;
+    rivals += 1;
+    if (chosen < 0 || (areas[id] ?? 0) > (areas[chosen] ?? 0)) chosen = id;
+  }
+  if (chosen < 0) return empty();
+
+  const mask = new Uint8Array(count);
+  let minX = width;
+  let minY = height;
+  let maxX = 0;
+  let maxY = 0;
+  let contrastSum = 0;
+  for (let index = 0; index < count; index += 1) {
+    if (comp[index] !== chosen) continue;
+    mask[index] = 1;
+    const x = index % width;
+    const y = (index - x) / width;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+    contrastSum += colorDistance(rgbAt(pixels, index), background);
+  }
+  const area = areas[chosen] ?? 0;
+  const areaRatio = area / count;
+  const significant = areas.reduce((sum, value) => sum + ((value ?? 0) >= minArea ? (value ?? 0) : 0), 0);
+  const dominance = area / Math.max(1, significant);
+  const touches = Number(touchLeft[chosen]) + Number(touchRight[chosen]) + Number(touchTop[chosen]);
+  const isolation = 1 - touches / 3;
+  const contrast = Math.max(0, Math.min(1, contrastSum / area / 90));
+  const boxArea = Math.max(1, (maxX - minX + 1) * (maxY - minY + 1));
+  const fill = area / boxArea;
+  const compact = fill < 0.12 ? 0.45 : fill > 0.93 && areaRatio > 0.55 ? 0.55 : 1;
+  const score =
+    areaTerm(areaRatio) * (0.35 + 0.65 * dominance) * (0.4 + 0.6 * isolation) * (0.45 + 0.55 * contrast) * compact;
+  const clear = score >= CLEAR_SCORE && rivals <= 2 && areaRatio >= 0.06 && areaRatio <= 0.62 && isolation >= 0.34;
+  return { mask, score, areaRatio, rivals, clear };
+}
+
+/** Earlier index wins a tie, so the first equally good frame stays chosen. */
+export function pickBestSubjectIndex(scores: readonly number[]): number {
+  let best = 0;
+  for (let index = 1; index < scores.length; index += 1) {
+    if (scores[index] > scores[best]) best = index;
+  }
+  return best;
+}
+
+function ellipseMask(width: number, height: number): Uint8Array {
+  const mask = new Uint8Array(width * height);
+  const cx = (width - 1) / 2;
+  const cy = (height - 1) / 2;
+  const rx = Math.max(2, width * 0.14);
+  const ry = Math.max(2, height * 0.32);
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
-      const pixel = y * width + x;
-      if (x + 1 < width && comp[pixel] !== comp[pixel + 1] && similar(comp[pixel] ?? 0, comp[pixel + 1] ?? 0)) {
-        unite(comp[pixel] ?? 0, comp[pixel + 1] ?? 0);
-      }
-      if (y + 1 < height && comp[pixel] !== comp[pixel + width] && similar(comp[pixel] ?? 0, comp[pixel + width] ?? 0)) {
-        unite(comp[pixel] ?? 0, comp[pixel + width] ?? 0);
-      }
+      const nx = (x - cx) / rx;
+      const ny = (y - cy) / ry;
+      if (nx * nx + ny * ny <= 1) mask[y * width + x] = 1;
     }
   }
-
-  const rootOf = new Map<number, number>();
-  const merged = new Int32Array(count);
-  const mergedAreas: number[] = [];
-  for (let index = 0; index < count; index += 1) {
-    const root = find(comp[index] ?? 0);
-    let id = rootOf.get(root);
-    if (id === undefined) {
-      id = mergedAreas.length;
-      rootOf.set(root, id);
-      mergedAreas[id] = 0;
-    }
-    merged[index] = id;
-    mergedAreas[id] += 1;
-  }
-  const minArea = Math.max(4, Math.round(count * MIN_AREA_RATIO));
-  let elementCount = 0;
-  for (const area of mergedAreas) {
-    if (area >= minArea) elementCount += 1;
-  }
-  return { comp: merged, areas: mergedAreas, elementCount };
+  return mask;
 }
 
-export function meshGrid(targetPolygons: number, aspect: number): { cols: number; rows: number; polygonCount: number } {
-  const clamped = Math.max(SCENE_POLYGON_MIN, Math.min(SCENE_POLYGON_MAX, Math.round(targetPolygons)));
-  const quads = Math.max(1, Math.round(clamped / 2));
-  const safeAspect = Math.max(0.4, Math.min(2.5, aspect));
-  const guess = Math.max(1, Math.round(Math.sqrt(quads * safeAspect)));
-  let bestCols = guess;
-  let bestRows = Math.max(1, Math.round(quads / guess));
-  let bestScore = Number.POSITIVE_INFINITY;
-  for (let cols = Math.max(1, guess - 12); cols <= guess + 12; cols += 1) {
-    const rows = Math.max(1, Math.round(quads / cols));
-    const count = cols * rows * 2;
-    const score = Math.abs(count - clamped) + Math.abs(cols / rows - safeAspect) * 24;
-    if (score < bestScore) {
-      bestScore = score;
-      bestCols = cols;
-      bestRows = rows;
-    }
-  }
-  return { cols: bestCols, rows: bestRows, polygonCount: bestCols * bestRows * 2 };
-}
-
-function boundaryDistance(comp: Int32Array, width: number, height: number): Float32Array {
-  const dist = new Float32Array(comp.length);
+function maskDistance(mask: Uint8Array, width: number, height: number): Float32Array {
+  const dist = new Float32Array(mask.length);
   dist.fill(1e6);
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const index = y * width + x;
-      const id = comp[index];
+      if (!mask[index]) {
+        dist[index] = 0;
+        continue;
+      }
       const edge =
         x === 0 ||
         y === 0 ||
         x + 1 === width ||
         y + 1 === height ||
-        comp[index - 1] !== id ||
-        comp[index + 1] !== id ||
-        comp[index - width] !== id ||
-        comp[index + width] !== id;
+        !mask[index - 1] ||
+        !mask[index + 1] ||
+        !mask[index - width] ||
+        !mask[index + width];
       if (edge) dist[index] = 0;
     }
   }
@@ -241,67 +289,29 @@ function boundaryDistance(comp: Int32Array, width: number, height: number): Floa
   return dist;
 }
 
-function sample(map: Float32Array, width: number, height: number, u: number, v: number): number {
-  const x = Math.max(0, Math.min(width - 1, u * (width - 1)));
-  const y = Math.max(0, Math.min(height - 1, v * (height - 1)));
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const x1 = Math.min(width - 1, x0 + 1);
-  const y1 = Math.min(height - 1, y0 + 1);
-  const tx = x - x0;
-  const ty = y - y0;
-  const a = map[y0 * width + x0] ?? 0;
-  const b = map[y0 * width + x1] ?? 0;
-  const c = map[y1 * width + x0] ?? 0;
-  const d = map[y1 * width + x1] ?? 0;
-  return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
-}
-
-function sampleColor(
-  pixels: Uint8ClampedArray | Uint8Array,
-  width: number,
-  height: number,
-  u: number,
-  v: number,
-): [number, number, number] {
-  const x = Math.max(0, Math.min(width - 1, u * (width - 1)));
-  const y = Math.max(0, Math.min(height - 1, v * (height - 1)));
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const offset = (y0 * width + x0) * 4;
-  return [(pixels[offset] ?? 0) / 255, (pixels[offset + 1] ?? 0) / 255, (pixels[offset + 2] ?? 0) / 255];
-}
-
-function depthMap(measured: Measured, width: number, height: number): Float32Array {
-  const { comp, areas } = measured;
-  let backdrop = 0;
-  for (let index = 1; index < areas.length; index += 1) {
-    if ((areas[index] ?? 0) > (areas[backdrop] ?? 0)) backdrop = index;
-  }
-  const edge = boundaryDistance(comp, width, height);
-  let maxEdge = 1;
-  for (let index = 0; index < comp.length; index += 1) {
-    if (comp[index] !== backdrop && (edge[index] ?? 0) > maxEdge) maxEdge = edge[index] ?? 1;
-  }
-  const depth = new Float32Array(comp.length);
-  for (let index = 0; index < comp.length; index += 1) {
-    const y = Math.floor(index / width) / Math.max(height - 1, 1);
-    if (comp[index] === backdrop) {
-      depth[index] = 0.02 + 0.06 * (1 - y);
-      continue;
+function maskBounds(mask: Uint8Array, width: number, height: number): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (!mask[y * width + x]) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
     }
-    const bulge = (edge[index] ?? 0) / maxEdge;
-    const closeness = 0.35 + 0.65 * (1 - y);
-    depth[index] = 0.2 + 0.8 * closeness * (0.4 + 0.6 * bulge);
   }
-  return depth;
+  if (maxX < 0) return null;
+  return { minX, minY, maxX, maxY };
 }
 
-function cross(a: [number, number, number], b: [number, number, number]): [number, number, number] {
+function cross(a: Vec3, b: Vec3): Vec3 {
   return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 }
 
-/** Grid resolution follows the slider. Vertex colors and height come from the still. */
+/** Clay volume of the subject silhouette. Grid resolution follows the slider. */
 export function buildSceneMesh(
   pixels: Uint8ClampedArray | Uint8Array,
   width: number,
@@ -311,78 +321,153 @@ export function buildSceneMesh(
   if (width < 2 || height < 2 || pixels.length < width * height * 4) {
     throw new Error("Could not build a scene mesh.");
   }
-  const measured = measureElements(pixels, width, height);
-  const depth = depthMap(measured, width, height);
-  const aspect = width / height;
-  const grid = meshGrid(targetPolygons, aspect);
-  const { cols, rows } = grid;
+  const read = readSubject(pixels, width, height);
+  const mask = read.mask.some((value) => value === 1) ? read.mask : ellipseMask(width, height);
+  const dist = maskDistance(mask, width, height);
+  const bounds = maskBounds(mask, width, height);
+  if (!bounds) throw new Error("Could not build a scene mesh.");
+  let { minX, minY, maxX, maxY } = bounds;
+  if (maxX - minX < 2) {
+    minX = Math.max(0, minX - 1);
+    maxX = Math.min(width - 1, maxX + 1);
+  }
+  if (maxY - minY < 2) {
+    minY = Math.max(0, minY - 1);
+    maxY = Math.min(height - 1, maxY + 1);
+  }
+  const spanX = Math.max(1, maxX - minX);
+  const spanY = Math.max(1, maxY - minY);
+  const inside = (col: number, row: number, cols: number, rows: number) => {
+    const x = Math.round(minX + ((col + 0.5) / cols) * spanX);
+    const y = Math.round(minY + ((row + 0.5) / rows) * spanY);
+    const cx = Math.max(0, Math.min(width - 1, x));
+    const cy = Math.max(0, Math.min(height - 1, y));
+    return mask[cy * width + cx] === 1;
+  };
+
+  const clamped = Math.max(SCENE_POLYGON_MIN, Math.min(SCENE_POLYGON_MAX, Math.round(targetPolygons)));
+  let cols = 2;
+  let rows = 2;
+  let bestErr = Number.POSITIVE_INFINITY;
+  let bestCount = -1;
+  for (let guess = 2; guess <= 96; guess += 1) {
+    const nextRows = Math.max(2, Math.round((guess * spanY) / spanX));
+    let quads = 0;
+    for (let row = 0; row < nextRows; row += 1) {
+      for (let col = 0; col < guess; col += 1) {
+        if (inside(col, row, guess, nextRows)) quads += 1;
+      }
+    }
+    const count = quads * 4;
+    const err = Math.abs(count - clamped);
+    if (count > 0 && (err < bestErr || (err === bestErr && count > bestCount))) {
+      bestErr = err;
+      bestCount = count;
+      cols = guess;
+      rows = nextRows;
+    }
+  }
+
+  let maxDist = 1;
+  for (let index = 0; index < mask.length; index += 1) {
+    if (mask[index] && (dist[index] ?? 0) > maxDist) maxDist = dist[index] ?? 1;
+  }
   const vertCols = cols + 1;
   const vertRows = rows + 1;
-  const spanX = aspect >= 1 ? 1.7 : 1.7 * aspect;
-  const spanY = aspect >= 1 ? 1.7 / aspect : 1.7;
-  const depthSpan = 0.62;
-  const positions = new Float32Array(vertCols * vertRows * 3);
-  const colors = new Float32Array(vertCols * vertRows * 3);
-  const vid = (c: number, r: number) => r * vertCols + c;
-  for (let r = 0; r < vertRows; r += 1) {
-    for (let c = 0; c < vertCols; c += 1) {
-      const u = c / cols;
-      const v = r / rows;
-      const offset = vid(c, r) * 3;
-      positions[offset] = (u - 0.5) * spanX;
-      positions[offset + 1] = (0.5 - v) * spanY;
-      positions[offset + 2] = sample(depth, width, height, u, v) * depthSpan;
-      const color = sampleColor(pixels, width, height, u, v);
-      colors[offset] = color[0];
-      colors[offset + 1] = color[1];
-      colors[offset + 2] = color[2];
-    }
-  }
-  const normals = new Float32Array(positions.length);
-  const at = (c: number, r: number): [number, number, number] => {
-    const cc = Math.max(0, Math.min(cols, c));
-    const rr = Math.max(0, Math.min(rows, r));
-    const offset = vid(cc, rr) * 3;
-    return [positions[offset] ?? 0, positions[offset + 1] ?? 0, positions[offset + 2] ?? 0];
+  const shell = vertCols * vertRows;
+  const midX = (minX + maxX) / 2;
+  const midY = (minY + maxY) / 2;
+  const scale = 1.55 / spanY;
+  const depth = Math.min(spanX, spanY) * scale * 0.46;
+  const positions = new Float32Array(shell * 2 * 3);
+  const colors = new Float32Array(shell * 2 * 3);
+  const atPixel = (col: number, row: number) => {
+    const x = minX + (col / cols) * spanX;
+    const y = minY + (row / rows) * spanY;
+    const ix = Math.max(0, Math.min(width - 1, Math.round(x)));
+    const iy = Math.max(0, Math.min(height - 1, Math.round(y)));
+    const on = mask[iy * width + ix] === 1;
+    const rise = on ? Math.pow((dist[iy * width + ix] ?? 0) / maxDist, 0.7) : 0;
+    return {
+      x: (x - midX) * scale,
+      y: (midY - y) * scale,
+      half: rise * depth,
+    };
   };
-  for (let r = 0; r < vertRows; r += 1) {
-    for (let c = 0; c < vertCols; c += 1) {
-      const left = at(c - 1, r);
-      const right = at(c + 1, r);
-      const down = at(c, r + 1);
-      const up = at(c, r - 1);
-      const tx: [number, number, number] = [right[0] - left[0], right[1] - left[1], right[2] - left[2]];
-      const ty: [number, number, number] = [up[0] - down[0], up[1] - down[1], up[2] - down[2]];
-      let normal = cross(tx, ty);
-      const length = Math.hypot(normal[0], normal[1], normal[2]) || 1;
-      if (normal[2] < 0) normal = [-normal[0], -normal[1], -normal[2]];
-      const offset = vid(c, r) * 3;
-      normals[offset] = normal[0] / length;
-      normals[offset + 1] = normal[1] / length;
-      normals[offset + 2] = normal[2] / length;
+  for (let row = 0; row < vertRows; row += 1) {
+    for (let col = 0; col < vertCols; col += 1) {
+      const point = atPixel(col, row);
+      const front = (row * vertCols + col) * 3;
+      const back = (shell + row * vertCols + col) * 3;
+      positions[front] = point.x;
+      positions[front + 1] = point.y;
+      positions[front + 2] = point.half;
+      positions[back] = point.x;
+      positions[back + 1] = point.y;
+      positions[back + 2] = -point.half;
+      colors[front] = SCENE_CLAY[0];
+      colors[front + 1] = SCENE_CLAY[1];
+      colors[front + 2] = SCENE_CLAY[2];
+      colors[back] = SCENE_CLAY[0];
+      colors[back + 1] = SCENE_CLAY[1];
+      colors[back + 2] = SCENE_CLAY[2];
     }
   }
-  const indices = new Uint16Array(cols * rows * 6);
-  let cursor = 0;
-  for (let r = 0; r < rows; r += 1) {
-    for (let c = 0; c < cols; c += 1) {
-      const a = vid(c, r);
-      const b = vid(c + 1, r);
-      const d = vid(c, r + 1);
-      const e = vid(c + 1, r + 1);
-      indices[cursor] = a;
-      indices[cursor + 1] = d;
-      indices[cursor + 2] = b;
-      indices[cursor + 3] = b;
-      indices[cursor + 4] = d;
-      indices[cursor + 5] = e;
-      cursor += 6;
+
+  const frontOf = (col: number, row: number) => row * vertCols + col;
+  const backOf = (col: number, row: number) => shell + row * vertCols + col;
+  const indexList: number[] = [];
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      if (!inside(col, row, cols, rows)) continue;
+      const a = frontOf(col, row);
+      const b = frontOf(col + 1, row);
+      const d = frontOf(col, row + 1);
+      const e = frontOf(col + 1, row + 1);
+      indexList.push(a, d, e, a, e, b);
+      const ba = backOf(col, row);
+      const bb = backOf(col + 1, row);
+      const bd = backOf(col, row + 1);
+      const be = backOf(col + 1, row + 1);
+      indexList.push(ba, be, bd, ba, bb, be);
     }
   }
-  return { positions, normals, colors, indices, polygonCount: grid.polygonCount };
+  if (indexList.length === 0) throw new Error("Could not build a scene mesh.");
+  const indices = new Uint16Array(indexList);
+  const normals = new Float32Array(positions.length);
+  for (let cursor = 0; cursor < indices.length; cursor += 3) {
+    const ia = (indices[cursor] ?? 0) * 3;
+    const ib = (indices[cursor + 1] ?? 0) * 3;
+    const ic = (indices[cursor + 2] ?? 0) * 3;
+    const p0: Vec3 = [positions[ia] ?? 0, positions[ia + 1] ?? 0, positions[ia + 2] ?? 0];
+    const p1: Vec3 = [positions[ib] ?? 0, positions[ib + 1] ?? 0, positions[ib + 2] ?? 0];
+    const p2: Vec3 = [positions[ic] ?? 0, positions[ic + 1] ?? 0, positions[ic + 2] ?? 0];
+    const normal = cross([p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]], [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]]);
+    for (const offset of [ia, ib, ic]) {
+      normals[offset] = (normals[offset] ?? 0) + normal[0];
+      normals[offset + 1] = (normals[offset + 1] ?? 0) + normal[1];
+      normals[offset + 2] = (normals[offset + 2] ?? 0) + normal[2];
+    }
+  }
+  for (let offset = 0; offset < normals.length; offset += 3) {
+    const length = Math.hypot(normals[offset] ?? 0, normals[offset + 1] ?? 0, normals[offset + 2] ?? 0) || 1;
+    normals[offset] = (normals[offset] ?? 0) / length;
+    normals[offset + 1] = (normals[offset + 1] ?? 0) / length;
+    normals[offset + 2] = (normals[offset + 2] ?? 0) / length;
+  }
+
+  let floorY = Number.POSITIVE_INFINITY;
+  const seen = new Uint8Array(shell * 2);
+  for (const index of indices) seen[index] = 1;
+  for (let index = 0; index < seen.length; index += 1) {
+    if (!seen[index]) continue;
+    const y = positions[index * 3 + 1] ?? 0;
+    if (y < floorY) floorY = y;
+  }
+  return { positions, normals, colors, indices, polygonCount: indices.length / 3, floorY };
 }
 
-export type Vec3 = [number, number, number];
+export type { Vec3 };
 
 export function orbitEye(yaw: number, pitch: number, radius = SCENE_ORBIT_RADIUS): Vec3 {
   const cp = Math.cos(pitch);

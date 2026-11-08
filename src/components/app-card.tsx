@@ -253,7 +253,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
                 },
               };
             });
-            setNeed("Picking the scene…");
+            setNeed("Picking the subject…");
             const picked = await pickSceneFrame(prepared.file, prepared.duration);
             if (token !== sceneToken.current) return;
             setScene(picked);
@@ -363,8 +363,8 @@ export function AppCard({ app }: { app: CatalogApp }) {
       }
     }
     if (app.kind === "reverse-3d") {
-      if (sceneState === "building") return "Building the 3D scene…";
-      if (sceneState !== "ready" || !scene) return "Could not build a 3D scene from that clip.";
+      if (sceneState === "building") return "Building the 3D subject…";
+      if (sceneState !== "ready" || !scene) return "Could not build a 3D subject from that clip.";
     }
     return null;
   }
@@ -729,7 +729,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
   const showScenePreview = app.kind === "reverse-3d" && scene && !active;
   const sceneCaption = scene
     ? `Drag to orbit · ${scene.time.toFixed(1)}s · ${polygonCount > 0 ? `${polygonCount} polygons` : "mesh"}`
-    : "Picking the scene…";
+    : "Picking the subject…";
   const sceneView =
     app.kind === "reverse-3d" && scene ? (
       <SceneOrbit
@@ -888,7 +888,11 @@ export function AppCard({ app }: { app: CatalogApp }) {
               ) : null}
               {control.type === "slider" && control.key === "polygons" && scene ? (
                 <p className="field-note">
-                  Scene at {scene.time.toFixed(1)}s · {scene.elements} separate {scene.elements === 1 ? "region" : "regions"}. Drag the view to orbit. Polygon changes stay in the browser.
+                  Subject at {scene.time.toFixed(1)}s.
+                  {scene.clear
+                    ? " The background is left out of the mesh."
+                    : " No single subject stood out, so this is the closest shape."}
+                  {scene.rivals > 1 ? " Other separate shapes were left out." : ""} Drag to orbit. Polygon changes stay in the browser.
                 </p>
               ) : null}
               {control.type === "text" ? (

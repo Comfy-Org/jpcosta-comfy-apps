@@ -9,10 +9,11 @@ import { POST } from "../src/app/api/run/[app]/route";
 import { getApp } from "../src/lib/config";
 import {
   buildSceneMesh,
-  measureElements,
   orbitFromDrag,
-  pickBusiestIndex,
+  pickBestSubjectIndex,
   projectPoint,
+  readSubject,
+  SCENE_CLAY,
   SCENE_DEFAULT_PITCH,
   SCENE_DEFAULT_YAW,
   sceneMvp,
@@ -137,41 +138,114 @@ async function main() {
   assert.throws(() => acceptedClipDuration(2.9), /at least 3/);
 
   const flat = paint(60, 34, () => [240, 240, 240]);
-  const busy = paint(60, 34, (x, y) => {
-    const colors: [number, number, number][] = [
-      [240, 240, 240],
-      [220, 30, 30],
-      [30, 90, 220],
-      [30, 160, 60],
-      [240, 180, 20],
-      [120, 40, 180],
-    ];
-    return colors[Math.floor(y / 17) * 3 + Math.floor(x / 20)] ?? [0, 0, 0];
+  const subject = paint(48, 27, (x, y) => (x > 14 && x < 34 && y > 6 && y < 20 ? [220, 40, 40] : [230, 230, 235]));
+  const crowd = paint(60, 36, (x, y) => {
+    const col = Math.floor(x / 20);
+    const row = Math.floor(y / 18);
+    const localX = x % 20;
+    const localY = y % 18;
+    const on = localX > 4 && localX < 15 && localY > 3 && localY < 14;
+    return on ? [40 + col * 40, 30 + row * 50, 200] : [232, 232, 232];
   });
-  assert.equal(measureElements(flat, 60, 34).elementCount, 1);
-  assert.ok(measureElements(busy, 60, 34).elementCount >= 5);
-  assert.equal(pickBusiestIndex([1, 4, 4, 2]), 1);
-  assert.equal(pickBusiestIndex([measureElements(flat, 60, 34).elementCount, measureElements(busy, 60, 34).elementCount]), 1);
+  const product = paint(48, 27, (x, y) => (x > 1 && x < 46 && y > 1 && y < 25 ? [20, 20, 20] : [240, 240, 240]));
+  const pair = paint(60, 40, (x, y) => {
+    if (x >= 8 && x <= 27 && y >= 4 && y <= 35) return [240, 240, 240];
+    if (x >= 42 && x <= 52 && y >= 10 && y <= 22) return [220, 40, 40];
+    return [70, 70, 74];
+  });
+  const subjectRead = readSubject(subject, 48, 27);
+  const crowdRead = readSubject(crowd, 60, 36);
+  const productRead = readSubject(product, 48, 27);
+  const pairRead = readSubject(pair, 60, 40);
+  const emptyRead = readSubject(flat, 60, 34);
+  assert.ok(subjectRead.clear, JSON.stringify(subjectRead));
+  assert.equal(subjectRead.rivals, 1);
+  assert.ok(subjectRead.score > crowdRead.score, JSON.stringify({ subject: subjectRead.score, crowd: crowdRead.score }));
+  assert.ok(crowdRead.rivals >= 4, `crowd rivals ${crowdRead.rivals}`);
+  assert.ok(subjectRead.score > productRead.score, JSON.stringify({ subject: subjectRead.score, product: productRead.score }));
+  assert.equal(emptyRead.score, 0);
+  assert.equal(pickBestSubjectIndex([subjectRead.score, crowdRead.score, subjectRead.score]), 0);
+  assert.equal(pickBestSubjectIndex([1, 4, 4, 2]), 1);
 
-  const relief = paint(48, 27, (x, y) => (x > 14 && x < 34 && y > 6 && y < 20 ? [220, 40, 40] : [230, 230, 235]));
-  const counts = [64, 256, 768, 2048, 4096].map((target) => buildSceneMesh(relief, 48, 27, target).polygonCount);
+  const counts = [64, 256, 768, 2048, 4096].map((target) => buildSceneMesh(subject, 48, 27, target).polygonCount);
   for (let index = 1; index < counts.length; index += 1) assert.ok(counts[index] >= counts[index - 1]);
   assert.ok(counts[counts.length - 1] > counts[0] * 8);
-  const low = buildSceneMesh(relief, 48, 27, 128);
-  const high = buildSceneMesh(relief, 48, 27, 3072);
+  const low = buildSceneMesh(subject, 48, 27, 128);
+  const high = buildSceneMesh(subject, 48, 27, 3072);
   assert.ok(high.polygonCount > low.polygonCount * 4);
   assert.ok(high.positions.length > low.positions.length);
-  assert.ok(Math.abs(low.polygonCount - 128) / 128 < 0.25);
-  let maxZ = Number.NEGATIVE_INFINITY;
-  for (let index = 2; index < low.positions.length; index += 3) maxZ = Math.max(maxZ, low.positions[index] ?? 0);
-  assert.ok(maxZ > (low.positions[2] ?? 0) + 0.08, `relief depth ${maxZ} vs corner ${low.positions[2]}`);
+  assert.ok(Math.abs(low.polygonCount - 128) / 128 < 0.35, `polygon count ${low.polygonCount}`);
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  let frontNormal = 0;
+  let backNormal = 0;
+  const seen = new Uint8Array(low.positions.length / 3);
+  for (const index of low.indices) seen[index] = 1;
+  for (let index = 0; index < seen.length; index += 1) {
+    if (!seen[index]) continue;
+    const offset = index * 3;
+    const x = low.positions[offset] ?? 0;
+    const y = low.positions[offset + 1] ?? 0;
+    const z = low.positions[offset + 2] ?? 0;
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+    minZ = Math.min(minZ, z);
+    maxZ = Math.max(maxZ, z);
+    if (z > 0.05) frontNormal += low.normals[offset + 2] ?? 0;
+    if (z < -0.05) backNormal += low.normals[offset + 2] ?? 0;
+    assert.ok(Math.abs((low.colors[offset] ?? 0) - SCENE_CLAY[0]) < 0.001);
+    assert.ok(Math.abs((low.colors[offset + 2] ?? 0) - SCENE_CLAY[2]) < 0.001);
+  }
+  const aspect = (maxX - minX) / Math.max(0.001, maxY - minY);
+  assert.ok(aspect < 1.7, `subject aspect ${aspect} still looks like the whole frame`);
+  assert.ok(maxZ - minZ > 0.28 * (maxY - minY), `thickness ${maxZ - minZ} vs height ${maxY - minY}`);
+  assert.ok(minZ < -0.05 && maxZ > 0.05, `volume z ${minZ}..${maxZ}`);
+  assert.ok(frontNormal > 0 && backNormal < 0, `normals front ${frontNormal} back ${backNormal}`);
+  assert.ok(Math.abs(low.floorY - minY) < 1e-4);
 
-  const cornerX = low.positions[0] ?? 0;
-  const cornerY = low.positions[1] ?? 0;
-  const cornerZ = low.positions[2] ?? 0;
-  const resting = projectPoint(sceneMvp(SCENE_DEFAULT_YAW, SCENE_DEFAULT_PITCH, 16 / 9), cornerX, cornerY, cornerZ, 960, 540);
+  const pairMesh = buildSceneMesh(pair, 60, 40, 768);
+  let pairMinX = Infinity;
+  let pairMaxX = -Infinity;
+  let pairMinY = Infinity;
+  let pairMaxY = -Infinity;
+  const pairSeen = new Uint8Array(pairMesh.positions.length / 3);
+  for (const index of pairMesh.indices) pairSeen[index] = 1;
+  for (let index = 0; index < pairSeen.length; index += 1) {
+    if (!pairSeen[index]) continue;
+    const x = pairMesh.positions[index * 3] ?? 0;
+    const y = pairMesh.positions[index * 3 + 1] ?? 0;
+    pairMinX = Math.min(pairMinX, x);
+    pairMaxX = Math.max(pairMaxX, x);
+    pairMinY = Math.min(pairMinY, y);
+    pairMaxY = Math.max(pairMaxY, y);
+  }
+  const pairAspect = (pairMaxX - pairMinX) / Math.max(0.001, pairMaxY - pairMinY);
+  assert.ok(pairAspect < 0.95, `kept both shapes, aspect ${pairAspect}`);
+  assert.ok(pairRead.rivals >= 2);
+
+  let bulge = 0;
+  let bulgeX = 0;
+  let bulgeY = 0;
+  let bulgeZ = 0;
+  for (let index = 0; index < seen.length; index += 1) {
+    if (!seen[index]) continue;
+    const z = low.positions[index * 3 + 2] ?? 0;
+    if (z > bulge) {
+      bulge = z;
+      bulgeX = low.positions[index * 3] ?? 0;
+      bulgeY = low.positions[index * 3 + 1] ?? 0;
+      bulgeZ = z;
+    }
+  }
+  const resting = projectPoint(sceneMvp(SCENE_DEFAULT_YAW, SCENE_DEFAULT_PITCH, 16 / 9), bulgeX, bulgeY, bulgeZ, 960, 540);
   const dragged = orbitFromDrag(SCENE_DEFAULT_YAW, SCENE_DEFAULT_PITCH, 140, -30);
-  const turned = projectPoint(sceneMvp(dragged.yaw, dragged.pitch, 16 / 9), cornerX, cornerY, cornerZ, 960, 540);
+  const turned = projectPoint(sceneMvp(dragged.yaw, dragged.pitch, 16 / 9), bulgeX, bulgeY, bulgeZ, 960, 540);
   assert.notEqual(dragged.yaw, SCENE_DEFAULT_YAW);
   assert.ok(resting.visible && turned.visible, JSON.stringify({ resting, turned }));
   assert.ok(Math.abs(resting.x - turned.x) > 15, JSON.stringify({ resting, turned, dragged }));

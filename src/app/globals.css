@@ -794,6 +794,7 @@ button.run .label { position: relative; }
   touch-action: none;
   cursor: grab;
   display: block;
+  background: #2a2a2e;
 }
 .scene-orbit:active { cursor: grabbing; }
 .scene-caption {
@@ -817,7 +818,7 @@ button.run .label { position: relative; }
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid var(--border);
-  background: var(--well);
+  background: #2a2a2e;
 }
 .shot-wrap .shot {
   position: absolute;
