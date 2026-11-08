@@ -12,6 +12,7 @@ import { saveMockJob } from "@/lib/mock";
 import { parseRunParams } from "@/lib/params";
 import { applyKlingFrame, readVideoPixelSize } from "@/lib/kling-frame";
 import { isPublicApp } from "@/lib/public-surface";
+import { durationOverCap, readContainerDurationSeconds } from "@/lib/video-duration";
 import { buildJobBody, filePathFor, redactJobBody, type UploadedAsset } from "@/lib/workflow";
 
 const USER_BODY_MAX = 4_500_000;
@@ -55,6 +56,9 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
       }
       if (entries.length === 0) {
         if (spec.optional) continue;
+        if (appId === "reverse-3d" && role === "scene") {
+          throw new AppError(400, "invalid_input", "The 3D scene reference is missing.");
+        }
         if (appId === "paparazzi-me" && role === "scene") continue;
         if (appId === "paparazzi-me" && role === "user") {
           throw new AppError(400, "invalid_input", "Upload your face.");
@@ -79,12 +83,21 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
           400,
           "invalid_input",
           appId === "reverse-3d"
-            ? "Upload a video. MP4, MOV, or WebM, 18 seconds or less."
+            ? `Upload a video. MP4, MOV, or WebM, ${spec.maxSeconds ?? 10} seconds or less.`
             : "Upload a video of someone holding the product. MP4, MOV, or WebM, trimmed to 4 MB or less.",
         );
       }
       incomingBytes += entry.size;
       const video = await prepareVideo(entry, spec.maxBytes ?? VIDEO_MAX_BYTES);
+      if (spec.maxSeconds !== undefined) {
+        const seconds = readContainerDurationSeconds(video.bytes);
+        if (seconds === null) {
+          throw new AppError(400, "invalid_input", `Could not read that video's length. Use ${spec.maxSeconds} seconds or less.`);
+        }
+        if (durationOverCap(seconds, spec.maxSeconds)) {
+          throw new AppError(400, "invalid_input", `That video is over ${spec.maxSeconds} seconds.`);
+        }
+      }
       media[role] = video;
     }
     if (incomingBytes > USER_BODY_MAX) {

@@ -97,7 +97,10 @@ function main() {
   if (!app) throw new Error("missing reverse-3d");
   const job = buildJobBody(
     app,
-    { video: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", filePath: "input.mp4" } },
+    {
+      video: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", filePath: "input.mp4" },
+      scene: { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", filePath: "scene.png" },
+    },
     { seed: 9, hasImage: true },
     "team-key",
   );

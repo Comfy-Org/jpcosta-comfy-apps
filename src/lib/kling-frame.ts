@@ -5,7 +5,7 @@ import type { Workflow } from "@/lib/workflow";
  * Kling 4.0 Edit rejects a source under 700px on either side, over 4553px,
  * or with a width/height ratio outside 0.40–2.50 (fal / Creatify schema;
  * the live error was "Video height must be at least 700px").
- * The working frame is also capped at 1080p-class pixels so an 18s 24fps
+ * The working frame is also capped at 1080p-class pixels so a 10s 24fps
  * batch is not upscaled toward that 4553px ceiling.
  */
 export const KLING_MIN_SIDE = 700;

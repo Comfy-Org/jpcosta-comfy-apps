@@ -196,8 +196,16 @@ assert.equal(getApp("reverse-3d")?.partnerNodes, true);
 assert.equal(getApp("reverse-3d")?.output.node, "21");
 assert.equal(getApp("reverse-3d")?.output.media, "video");
 assert.equal(getApp("reverse-3d")?.videoInputs?.video.node, "10");
-assert.equal(getApp("reverse-3d")?.videoInputs?.video.maxSeconds, 18);
-assert.equal(REVERSE_3D_MAX_SECONDS, 18);
+assert.equal(getApp("reverse-3d")?.videoInputs?.video.maxSeconds, 10);
+assert.equal(getApp("reverse-3d")?.imageInputs.scene?.node, "12");
+assert.equal(REVERSE_3D_MAX_SECONDS, 10);
+assert.match(reverseCatalog?.images[0]?.hint ?? "", /10 seconds/);
+assert.doesNotMatch(reverseCatalog?.images[0]?.hint ?? "", /18 seconds/);
+const polygonControl = reverseCatalog?.controls.find((control) => control.key === "polygons");
+assert.equal(polygonControl?.type, "slider");
+assert.equal(polygonControl && polygonControl.type === "slider" ? polygonControl.clientOnly : false, true);
+assert.equal(polygonControl && polygonControl.type === "slider" ? polygonControl.min : 0, 64);
+assert.equal(polygonControl && polygonControl.type === "slider" ? polygonControl.max : 0, 4096);
 assert.equal(REVERSE_3D_MIN_SECONDS, 3);
 assert.equal(isAllowedVideoMime("video/webm;codecs=vp9"), true);
 assert.equal(isAllowedVideoMime("video/mp4;codecs=avc1.42E01E"), true);
@@ -554,7 +562,10 @@ assert.equal(carveJob.extra_data?.api_key_comfy_org, "team-key");
 const reverse3d = mustApp("reverse-3d");
 const reverseJob = buildJobBody(
   reverse3d,
-  { video: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", filePath: "input.mp4" } },
+  {
+    video: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", filePath: "input.mp4" },
+    scene: { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", filePath: "scene.png" },
+  },
   { seed: 42, hasImage: true },
   "team-key",
 );
@@ -571,8 +582,15 @@ assert.equal(reverseJob.workflow["16"].class_type, "CreateVideo");
 assert.equal(reverseJob.workflow["16"].inputs.fps, 24);
 assert.deepEqual(reverseJob.workflow["16"].inputs.images, ["17", 0]);
 assert.deepEqual(reverseJob.workflow["16"].inputs.audio, ["15", 1]);
+assert.equal(reverseJob.workflow["12"].class_type, "LoadImage");
+assert.deepEqual(reverseJob.workflow["12"].inputs.image, {
+  __type: "core/ASSET",
+  info: { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", file_path: "scene.png" },
+});
 assert.equal(reverseJob.workflow["20"].class_type, "Kling4EditVideoNode");
 assert.deepEqual(reverseJob.workflow["20"].inputs["model.video_1"], ["16", 0]);
+assert.deepEqual(reverseJob.workflow["20"].inputs["model.reference_images.image_1"], ["12", 0]);
+assert.match(String(reverseJob.workflow["20"].inputs["model.prompt"]), /@Image1/);
 assert.equal(reverseJob.workflow["20"].inputs["model.seed"], 42);
 assert.equal(reverseJob.workflow["21"].class_type, "SaveVideo");
 assert.equal(reverseJob.extra_data?.api_key_comfy_org, "team-key");

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "check": "tsx scripts/public-surface-check.ts && tsx scripts/client-fetch-check.ts && tsx scripts/kling-frame-check.ts && tsx scripts/self-check.ts"
+    "check": "tsx scripts/public-surface-check.ts && tsx scripts/client-fetch-check.ts && tsx scripts/kling-frame-check.ts && tsx scripts/reverse-3d-scene-check.ts && tsx scripts/self-check.ts"
   },
   "dependencies": {
     "next": "16.3.6",

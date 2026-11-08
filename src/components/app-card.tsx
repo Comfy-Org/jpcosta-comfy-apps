@@ -6,8 +6,11 @@ import { downloadBlob, exportCutout } from "@/lib/composite";
 import { FORM_BUDGET_BYTES, VIDEO_FORM_BUDGET_BYTES, imageRejectReason, packImages, randomSeed, shrinkForUpload, videoRejectReason, videoTypeRejectReason } from "@/lib/prepare-image";
 import { clientFailureMessage, fetchBlobRetrying, type ClientStep } from "@/lib/client-fetch";
 import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
+import { pickSceneFrame, type ScenePick } from "@/lib/scene-client";
+import { SCENE_POLYGON_DEFAULT } from "@/lib/scene-mesh";
 import { LILAC, TERMINAL_STATUSES, type CatalogApp, type CatalogImage, type JobView, type RunResponse, type TextControl } from "@/lib/types";
 import { AppIcon } from "@/components/app-icon";
+import { SceneOrbit, type SceneOrbitHandle } from "@/components/scene-orbit";
 
 type SceneCandidate = {
   token: string;
@@ -98,7 +101,12 @@ export function AppCard({ app }: { app: CatalogApp }) {
   const [findingScene, setFindingScene] = useState(false);
   const [waited, setWaited] = useState(0);
   const [recovery, setRecovery] = useState<Recovery | null>(null);
+  const [scene, setScene] = useState<ScenePick | null>(null);
+  const [sceneState, setSceneState] = useState<"idle" | "building" | "ready" | "error">("idle");
+  const [polygonCount, setPolygonCount] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+  const sceneToken = useRef(0);
+  const sceneOrbitRef = useRef<SceneOrbitHandle | null>(null);
   const stepRef = useRef<ClientStep>("submit");
   const previewRef = useRef<HTMLDivElement | null>(null);
   const [previewWidth, setPreviewWidth] = useState(640);
@@ -222,28 +230,45 @@ export function AppCard({ app }: { app: CatalogApp }) {
             setNeed(reason);
             return;
           }
+          const token = ++sceneToken.current;
+          setScene(null);
+          setPolygonCount(0);
+          setSceneState("building");
           setNeed("Checking the clip…");
-          const prepared = await prepareReverse3dUpload(file);
-          setNeed(
-            prepared.trimmed
-              ? `Using the first ${REVERSE_3D_MAX_SECONDS} seconds of this clip. Kling 4.0 Edit keeps the input length; 18 seconds is the longest that round-trips here.`
-              : null,
-          );
-          setUploads((current) => {
-            revokeUpload(current[role]);
-            return {
-              ...current,
-              [role]: {
-                file: prepared.file,
-                source: file,
-                url: URL.createObjectURL(prepared.file),
-                sourceUrl: URL.createObjectURL(file),
-                name: file.name,
-                width: prepared.width,
-                height: prepared.height,
-              },
-            };
-          });
+          try {
+            const prepared = await prepareReverse3dUpload(file);
+            if (token !== sceneToken.current) return;
+            setUploads((current) => {
+              revokeUpload(current[role]);
+              return {
+                ...current,
+                [role]: {
+                  file: prepared.file,
+                  source: file,
+                  url: URL.createObjectURL(prepared.file),
+                  sourceUrl: URL.createObjectURL(file),
+                  name: file.name,
+                  width: prepared.width,
+                  height: prepared.height,
+                },
+              };
+            });
+            setNeed("Picking the scene…");
+            const picked = await pickSceneFrame(prepared.file, prepared.duration);
+            if (token !== sceneToken.current) return;
+            setScene(picked);
+            setSceneState("ready");
+            setNeed(
+              prepared.trimmed
+                ? `Using the first ${REVERSE_3D_MAX_SECONDS} seconds of this clip.`
+                : null,
+            );
+          } catch (err) {
+            if (token !== sceneToken.current) return;
+            setScene(null);
+            setSceneState("error");
+            setNeed(err instanceof Error ? err.message : "Could not read that video.");
+          }
           return;
         }
         const reason = file ? videoRejectReason(file) : "Upload a video.";
@@ -337,6 +362,10 @@ export function AppCard({ app }: { app: CatalogApp }) {
         return "Upload an image first.";
       }
     }
+    if (app.kind === "reverse-3d") {
+      if (sceneState === "building") return "Building the 3D scene…";
+      if (sceneState !== "ready" || !scene) return "Could not build a 3D scene from that clip.";
+    }
     return null;
   }
 
@@ -378,7 +407,9 @@ export function AppCard({ app }: { app: CatalogApp }) {
       return label || "Box";
     }
     if (app.kind === "carve") return "9:16 timelapse";
-    if (app.kind === "reverse-3d") return "Blocky playblast";
+    if (app.kind === "reverse-3d") {
+      return polygonCount > 0 ? `Blocky playblast · ${polygonCount} polygons` : "Blocky playblast";
+    }
     if (app.kind === "paparazzi") {
       const name = controlValue(next, "celebrity").trim();
       const resolution = controlValue(next, "resolution") || "2K";
@@ -563,7 +594,21 @@ export function AppCard({ app }: { app: CatalogApp }) {
       return;
     }
     const budget = app.images.some((image) => image.accept === "video") ? VIDEO_FORM_BUDGET_BYTES : FORM_BUDGET_BYTES;
-    if (formBytes() > budget) {
+    let sceneFile: File | null = null;
+    if (app.kind === "reverse-3d") {
+      try {
+        const blob = await sceneOrbitRef.current?.capture();
+        if (!blob) {
+          setNeed("The 3D scene is not ready yet.");
+          return;
+        }
+        sceneFile = new File([blob], "scene.png", { type: "image/png" });
+      } catch (err) {
+        setNeed(err instanceof Error ? err.message : "Could not read the 3D scene.");
+        return;
+      }
+    }
+    if (formBytes() + (sceneFile?.size ?? 0) > budget) {
       setNeed("These files are over the upload limit. Trim the video or use smaller photos.");
       return;
     }
@@ -600,6 +645,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
       }
       if (nextSeed !== null) form.append("seed", String(nextSeed));
       if (app.kind === "paparazzi" && !uploads.scene && selectedToken) form.append("sceneToken", selectedToken);
+      if (sceneFile) form.append("scene", sceneFile, sceneFile.name);
 
       const response = await fetch(app.endpoint, { method: "POST", body: form, signal: controller.signal });
       setFindingScene(false);
@@ -679,6 +725,22 @@ export function AppCard({ app }: { app: CatalogApp }) {
   const showVideoCompare = view === 1 && app.kind === "reverse-3d" && active;
   const showSprite = view === 1 && app.kind === "sprite" && active;
   const grid = app.grids?.[active?.frames || Object.keys(app.grids ?? {})[0] || "8"] ?? { cols: 4, rows: 2 };
+  const polygonValue = Number(controlValue(values, "polygons")) || SCENE_POLYGON_DEFAULT;
+  const showScenePreview = app.kind === "reverse-3d" && scene && !active;
+  const sceneCaption = scene
+    ? `Drag to orbit · ${scene.time.toFixed(1)}s · ${polygonCount > 0 ? `${polygonCount} polygons` : "mesh"}`
+    : "Picking the scene…";
+  const sceneView =
+    app.kind === "reverse-3d" && scene ? (
+      <SceneOrbit
+        ref={sceneOrbitRef}
+        pixels={scene.pixels}
+        width={scene.width}
+        height={scene.height}
+        polygons={polygonValue}
+        onPolygonCount={setPolygonCount}
+      />
+    ) : null;
 
   const selectedScene = selectedToken ? `/api/paparazzi/scene?token=${encodeURIComponent(selectedToken)}` : "";
   const status = findingScene
@@ -778,7 +840,9 @@ export function AppCard({ app }: { app: CatalogApp }) {
             <div key={control.key}>
               <div className="lab">
                 {control.label}
-                {control.type === "slider" ? <b>{controlValue(values, control.key)}</b> : null}
+                {control.type === "slider" ? (
+                  <b>{control.key === "polygons" && polygonCount > 0 ? polygonCount : controlValue(values, control.key)}</b>
+                ) : null}
                 {control.type === "text" && control.optional ? <b>optional</b> : null}
               </div>
               {control.type === "seg" ? (
@@ -815,10 +879,17 @@ export function AppCard({ app }: { app: CatalogApp }) {
                     step={control.step}
                     value={controlValue(values, control.key)}
                     aria-label={control.label}
-                    style={{ ["--fill" as string]: `${controlValue(values, control.key)}%` }}
+                    style={{
+                      ["--fill" as string]: `${control.max === control.min ? 0 : ((Number(controlValue(values, control.key)) - control.min) / (control.max - control.min)) * 100}%`,
+                    }}
                     onChange={(event) => setControl(control.key, event.target.value)}
                   />
                 </div>
+              ) : null}
+              {control.type === "slider" && control.key === "polygons" && scene ? (
+                <p className="field-note">
+                  Scene at {scene.time.toFixed(1)}s · {scene.elements} separate {scene.elements === 1 ? "region" : "regions"}. Drag the view to orbit. Polygon changes stay in the browser.
+                </p>
               ) : null}
               {control.type === "text" ? (
                 <>
@@ -882,6 +953,12 @@ export function AppCard({ app }: { app: CatalogApp }) {
                 onHot={(on) => setHot(on ? image.key : null)}
               />
             ))}
+          {app.kind === "reverse-3d" && scene && active ? (
+            <div className="scene-dock">
+              {sceneView}
+              <div className="scene-caption">{sceneCaption}</div>
+            </div>
+          ) : null}
           {app.hasSeed ? (
             <div className="seedline">
               Seed <b>{seed ?? "—"}</b>
@@ -891,7 +968,7 @@ export function AppCard({ app }: { app: CatalogApp }) {
           <div className="need" role="status">
             {phase === "error" && error ? error : need}
           </div>
-          <button className="run" type="button" onClick={() => void (recovery && phase === "error" ? resume() : run())} disabled={busy || searching}>
+          <button className="run" type="button" onClick={() => void (recovery && phase === "error" ? resume() : run())} disabled={busy || searching || (app.kind === "reverse-3d" && Boolean(uploads.video) && sceneState !== "ready")}>
             <span className="label">
               {busy ? (
                 findingScene ? "Searching…" : phase === "queued" ? "Queued…" : "Running…"
@@ -972,13 +1049,20 @@ export function AppCard({ app }: { app: CatalogApp }) {
                 )}
               </div>
             ) : null}
-            {!active && primaryUpload ? (
+            {showScenePreview ? (
+              <div className="shot-wrap scene-stage">
+                {sceneView}
+                <div className="scene-caption">{sceneCaption}</div>
+              </div>
+            ) : null}
+            {!active && primaryUpload && !showScenePreview ? (
               <div className="shot-wrap">
                 <ResultMedia
                   url={primaryUpload.url}
                   video={imageSpec(primaryKey ?? "")?.accept === "video"}
                   alt="Uploaded file"
                 />
+                {app.kind === "reverse-3d" && sceneState === "building" ? <div className="scene-caption">{sceneCaption}</div> : null}
               </div>
             ) : null}
             {!active && !primaryUpload && selectedScene ? (

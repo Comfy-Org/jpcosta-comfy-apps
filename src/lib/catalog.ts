@@ -9,7 +9,9 @@ import {
 } from "@/lib/choices";
 import { getApp, listVisibleAppIds, type AppConfig } from "@/lib/config";
 import { PUBLIC_APP_IDS } from "@/lib/public-surface";
+import { SCENE_POLYGON_DEFAULT, SCENE_POLYGON_MAX, SCENE_POLYGON_MIN } from "@/lib/scene-mesh";
 import type { CatalogApp, ClientControl, SpriteGrid } from "@/lib/types";
+import { REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
 
 const VIDEO_POLL_MS = 15 * 60 * 1000;
 const IMAGE_POLL_MS = 8 * 60 * 1000;
@@ -161,7 +163,7 @@ const CHROME: Record<
         key: "video",
         label: "Final video",
         accept: "video",
-        hint: "MP4, MOV, or WebM, 3 to 18 seconds. Longer clips use the first 18 seconds. Clips over 4 MB are resampled to 24 fps in the browser.",
+        hint: `MP4, MOV, or WebM, 3 to ${REVERSE_3D_MAX_SECONDS} seconds. Longer clips use the first ${REVERSE_3D_MAX_SECONDS} seconds. Clips over 4 MB are resampled to 24 fps in the browser.`,
       },
     ],
   },
@@ -324,6 +326,20 @@ function controlsFor(id: string, app: AppConfig): ClientControl[] {
         options: listBoxPresets().map((preset) => ({ value: preset.id, label: preset.label, image: preset.thumb })),
         default: "kraft_mailer",
         hint: "The sealed lid opens onto this empty insert. The camera stays locked overhead.",
+      },
+    ];
+  }
+  if (id === "reverse-3d") {
+    return [
+      {
+        type: "slider",
+        key: "polygons",
+        label: "Polygons",
+        min: SCENE_POLYGON_MIN,
+        max: SCENE_POLYGON_MAX,
+        step: 64,
+        default: SCENE_POLYGON_DEFAULT,
+        clientOnly: true,
       },
     ];
   }

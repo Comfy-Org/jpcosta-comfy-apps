@@ -17,7 +17,7 @@ export type VideoInputSpec = {
   input: string;
   /** Hard cap. Vercel rejects request bodies around 4.5 MB. */
   maxBytes?: number;
-  /** Client-side duration cap, in seconds. */
+  /** Duration cap, in seconds. The client trims to this. The server rejects a longer container. */
   maxSeconds?: number;
 };
 
