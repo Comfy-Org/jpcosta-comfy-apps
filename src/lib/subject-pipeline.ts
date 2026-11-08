@@ -24,8 +24,10 @@ export function buildPickWorkflow(frameCount: number): Workflow {
   const gemini: Record<string, unknown> = {
     model: "Gemini 3.5 Flash",
     "model.prompt": prompt,
-    "model.thinking_level": "LOW",
-    "model.max_output_tokens": 256,
+    // MINIMAL is a listed level for this model. A 256-token cap can be spent on
+    // thinking and come back empty, so the answer cap stays above the two lines.
+    "model.thinking_level": "MINIMAL",
+    "model.max_output_tokens": 1024,
     "model.seed": 0,
     "model.system_prompt": "You identify the main subject of a clip. Reply in the exact two-line format you are given.",
     "model.temperature": 0,
@@ -195,6 +197,38 @@ export function buildHunyuanWorkflow(): Workflow {
       _meta: { title: "Hunyuan3D image to model" },
     },
   };
+}
+
+export type NamedOutput = { id: string; name: string; sig?: string };
+
+const NOT_A_MESH = /\.(png|jpe?g|webp|gif|txt|mp4|webm|mov|obj|mtl|json)$/i;
+
+/**
+ * The GLB from a Hunyuan job. A preview image is not a mesh and is not used.
+ * Returns null when the job has no mesh file, so the caller can say so.
+ */
+export function selectMeshOutput(outputs: readonly NamedOutput[]): NamedOutput | null {
+  const glb = outputs.find((item) => /\.glb$/i.test(item.name));
+  if (glb) return glb;
+  const named = outputs.find((item) => item.name === "GLB" || /glb/i.test(item.name));
+  if (named && !NOT_A_MESH.test(named.name)) return named;
+  const other = outputs.find((item) => item.name.length > 0 && !NOT_A_MESH.test(item.name));
+  return other ?? null;
+}
+
+/** SaveText file from the frame-choice job. Skips image outputs on the same node. */
+export function selectTextOutput(outputs: readonly NamedOutput[]): NamedOutput | null {
+  const text = outputs.find((item) => /\.txt$/i.test(item.name));
+  if (text) return text;
+  return outputs.find((item) => item.name.length > 0 && !/\.(png|jpe?g|webp|gif|glb|mp4|webm|mov)$/i.test(item.name)) ?? null;
+}
+
+/** Signature subject for a cut-out asset. Not a public job or output route. */
+export function cutoutAssetToken(assetId: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(assetId)) {
+    throw new Error("The background cut-out did not return an image.");
+  }
+  return `reverse-3d-cutout~${assetId}`;
 }
 
 export type SubjectChoice = {
