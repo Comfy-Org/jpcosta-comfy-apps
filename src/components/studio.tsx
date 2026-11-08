@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AppCard } from "@/components/app-card";
 import { easeSlide, exitOpacity, MIN_CARD_GAP, NAV_MS, trackGap } from "@/lib/ease-slide";
 import type { CatalogApp } from "@/lib/types";
@@ -69,11 +69,14 @@ export function Studio({
   mock,
   configured,
   notice = null,
+  menu = null,
 }: {
   apps: CatalogApp[];
   mock: boolean;
   configured: boolean;
   notice?: string | null;
+  /** Optional row between the brand and the header actions. */
+  menu?: ReactNode;
 }) {
   const count = apps.length;
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -327,6 +330,7 @@ export function Studio({
             </span>
             <span className="brand-word">Comfy API Apps</span>
           </div>
+          {menu}
           <div className="header-actions">{mock ? <span className="mockpill">Mock mode</span> : null}</div>
         </div>
       </header>

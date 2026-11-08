@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { Studio } from "@/components/studio";
+import { ViewportMenu, ViewportShell } from "@/components/viewport-shell";
 import { buildPublicCatalog } from "@/lib/catalog";
 import { apiKey, isMockMode, missingDedicatedKeyMessage } from "@/lib/env";
+import "./viewport.css";
 
 export const dynamic = "force-dynamic";
 
@@ -14,11 +16,14 @@ export default function Reverse3dPage() {
   const mock = isMockMode();
   const ready = Boolean(apiKey("reverse-3d"));
   return (
-    <Studio
-      apps={buildPublicCatalog()}
-      mock={mock}
-      configured
-      notice={mock || ready ? null : missingDedicatedKeyMessage("reverse-3d")}
-    />
+    <ViewportShell>
+      <Studio
+        apps={buildPublicCatalog()}
+        mock={mock}
+        configured
+        notice={mock || ready ? null : missingDedicatedKeyMessage("reverse-3d")}
+        menu={<ViewportMenu />}
+      />
+    </ViewportShell>
   );
 }
