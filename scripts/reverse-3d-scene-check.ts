@@ -10,7 +10,15 @@ import { POST as postSubject } from "../src/app/api/reverse-3d/subject/route";
 import { getApp } from "../src/lib/config";
 import { blockFigureMesh, decodeGlb, encodeGlb, reduceMesh } from "../src/lib/mesh-reduce";
 import { buildBoxMesh, orbitFromDrag, projectPoint, SCENE_CLAY, SCENE_DEFAULT_PITCH, SCENE_DEFAULT_YAW, sceneMvp } from "../src/lib/scene-mesh";
-import { buildMeshWorkflow, buildPickWorkflow, parseSubjectChoice, MESH_KEEP_FRACTION } from "../src/lib/subject-pipeline";
+import {
+  backgroundModelName,
+  buildCutoutWorkflow,
+  buildHunyuanWorkflow,
+  buildPickWorkflow,
+  comboOptions,
+  parseSubjectChoice,
+  MESH_KEEP_FRACTION,
+} from "../src/lib/subject-pipeline";
 import { durationOverCap, readContainerDurationSeconds } from "../src/lib/video-duration";
 import { acceptedClipDuration, REVERSE_3D_MAX_SECONDS } from "../src/lib/video-client";
 import { buildJobBody } from "../src/lib/workflow";
@@ -128,15 +136,37 @@ async function main() {
   assert.throws(() => parseSubjectChoice("a person in the middle", 12), /choose a frame/);
   assert.throws(() => parseSubjectChoice("frame: 13\nsubject: someone", 12), /not sampled/);
 
-  const meshGraph = buildMeshWorkflow();
-  assert.equal(meshGraph["2"]?.class_type, "LoadBackgroundRemovalModel");
-  assert.equal(meshGraph["2"]?.inputs.bg_removal_name, "birefnet.safetensors");
-  assert.equal(meshGraph["3"]?.class_type, "RemoveBackground");
-  assert.deepEqual(meshGraph["3"]?.inputs.image, ["1", 0]);
-  assert.equal(meshGraph["5"]?.class_type, "JoinImageWithAlpha");
+  assert.deepEqual(
+    comboOptions(
+      { LoadBackgroundRemovalModel: { input: { required: { bg_removal_name: [["birefnet.safetensors"], { tooltip: "x" }] } } } },
+      "bg_removal_name",
+    ),
+    ["birefnet.safetensors"],
+  );
+  assert.deepEqual(comboOptions({ input: { required: { bg_removal_name: [[]] } } }, "bg_removal_name"), []);
+  assert.throws(() => backgroundModelName([]), /no background-removal model/);
+  assert.equal(backgroundModelName(["birefnet.safetensors"]), "birefnet.safetensors");
+  assert.equal(backgroundModelName(["BiRefNet-general.safetensors"]), "BiRefNet-general.safetensors");
+
+  const otherCutout = buildCutoutWorkflow(backgroundModelName(["BiRefNet-general.safetensors"]));
+  assert.equal(otherCutout["2"]?.inputs.bg_removal_name, "BiRefNet-general.safetensors");
+  assert.equal(JSON.stringify(otherCutout).includes("birefnet.safetensors"), false);
+
+  const cutoutGraph = buildCutoutWorkflow(backgroundModelName(["birefnet.safetensors"]));
+  assert.equal(cutoutGraph["2"]?.class_type, "LoadBackgroundRemovalModel");
+  assert.equal(cutoutGraph["2"]?.inputs.bg_removal_name, "birefnet.safetensors");
+  assert.equal(cutoutGraph["3"]?.class_type, "RemoveBackground");
+  assert.deepEqual(cutoutGraph["3"]?.inputs.image, ["1", 0]);
+  assert.equal(cutoutGraph["5"]?.class_type, "JoinImageWithAlpha");
+  assert.equal(cutoutGraph["6"]?.class_type, "SaveImage");
+
+  const meshGraph = buildHunyuanWorkflow();
+  assert.equal(meshGraph["2"], undefined);
+  assert.equal(JSON.stringify(meshGraph).includes("LoadBackgroundRemovalModel"), false);
+  assert.equal(JSON.stringify(meshGraph).includes("birefnet"), false);
   assert.equal(meshGraph["21"]?.class_type, "TencentImageToModelNode");
   assert.equal(meshGraph["21"]?.inputs.generate_type, "Geometry");
-  assert.deepEqual(meshGraph["21"]?.inputs.image, ["5", 0]);
+  assert.deepEqual(meshGraph["21"]?.inputs.image, ["1", 0]);
 
   const source = blockFigureMesh();
   const reduced = reduceMesh(source);
@@ -290,13 +320,17 @@ async function main() {
     positions?: number[];
     pick?: Record<string, { class_type?: string }>;
     mesh?: Record<string, { class_type?: string; inputs?: Record<string, unknown> }>;
+    cutout?: Record<string, { class_type?: string; inputs?: Record<string, unknown> }>;
     error?: { message?: string };
   };
   assert.equal(subjectResponse.status, 200, JSON.stringify(subjectBody.error));
   assert.equal(subjectBody.subject, "The main subject");
   assert.equal(subjectBody.pick?.["20"]?.class_type, "GeminiNodeV3");
-  assert.equal(subjectBody.mesh?.["2"]?.class_type, "LoadBackgroundRemovalModel");
   assert.equal(subjectBody.mesh?.["21"]?.class_type, "TencentImageToModelNode");
+  assert.equal(subjectBody.mesh?.["2"], undefined);
+  assert.equal(JSON.stringify(subjectBody.mesh).includes("birefnet"), false);
+  assert.equal(subjectBody.cutout?.["2"]?.class_type, "LoadBackgroundRemovalModel");
+  assert.equal(subjectBody.cutout?.["2"]?.inputs?.bg_removal_name, "birefnet.safetensors");
   assert.ok((subjectBody.reducedFaces ?? 0) < (subjectBody.sourceFaces ?? 0));
   assert.ok((subjectBody.positions?.length ?? 0) > 9);
 

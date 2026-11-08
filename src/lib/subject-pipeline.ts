@@ -58,10 +58,61 @@ export function buildPickWorkflow(frameCount: number): Workflow {
 }
 
 /**
- * BiRefNet cuts the chosen frame, then Hunyuan3D builds the mesh.
- * Node 21 is the job output, same slot the playblast graph uses for its save.
+ * Combo values for one node input.
+ * Comfy sends them as the first element of `[names, options]`, or as `options`.
+ * An empty array is a real answer: that deployment has no file for the input.
  */
-export function buildMeshWorkflow(): Workflow {
+export function comboOptions(spec: unknown, inputName: string): string[] {
+  const names: string[] = [];
+  const take = (value: unknown) => {
+    if (Array.isArray(value)) {
+      const nested = value.find((item) => Array.isArray(item));
+      const list = Array.isArray(nested) ? nested : value;
+      for (const item of list) {
+        if (typeof item === "string" && item.trim()) names.push(item.trim());
+      }
+      return;
+    }
+    if (value && typeof value === "object" && "options" in value) {
+      take((value as { options: unknown }).options);
+    }
+  };
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (key === inputName) take(child);
+      else visit(child);
+    }
+  };
+  visit(spec);
+  return [...new Set(names)];
+}
+
+/**
+ * Filename `LoadBackgroundRemovalModel` will accept on the deployment that returned `listed`.
+ * The installed BiRefNet weight is `birefnet.safetensors` only when that string is actually listed.
+ * Any other listed name is used as-is. An empty list cannot be satisfied by a hardcoded filename.
+ */
+export function backgroundModelName(listed: readonly string[]): string {
+  const names = [...new Set(listed.map((name) => name.trim()).filter(Boolean))];
+  if (names.length === 0) {
+    throw new Error("That deployment lists no background-removal model, so no filename can be validated.");
+  }
+  const installed = names.find((name) => name === "birefnet.safetensors" || name.endsWith("/birefnet.safetensors"));
+  return installed ?? names[0];
+}
+
+/**
+ * Same chain as the background-removal app. Submitted only to that deployment.
+ * `modelName` must be one of the names its `LoadBackgroundRemovalModel` combo lists.
+ */
+export function buildCutoutWorkflow(modelName: string): Workflow {
+  const name = modelName.trim();
+  if (!name) throw new Error("That deployment lists no background-removal model, so no filename can be validated.");
   return {
     "1": {
       class_type: "LoadImage",
@@ -70,7 +121,7 @@ export function buildMeshWorkflow(): Workflow {
     },
     "2": {
       class_type: "LoadBackgroundRemovalModel",
-      inputs: { bg_removal_name: "birefnet.safetensors" },
+      inputs: { bg_removal_name: name },
       _meta: { title: "BiRefNet" },
     },
     "3": {
@@ -93,11 +144,34 @@ export function buildMeshWorkflow(): Workflow {
       },
       _meta: { title: "Cut-out subject" },
     },
+    "6": {
+      class_type: "SaveImage",
+      inputs: {
+        images: ["5", 0],
+        filename_prefix: "reverse-3d/cutout",
+      },
+      _meta: { title: "Cut-out PNG" },
+    },
+  };
+}
+
+/**
+ * Hunyuan3D on the Reverse 3D deployment.
+ * That host is partner-only, so this graph has no `LoadBackgroundRemovalModel`.
+ * Node 21 is the job output, same slot the playblast graph uses for its save.
+ */
+export function buildHunyuanWorkflow(): Workflow {
+  return {
+    "1": {
+      class_type: "LoadImage",
+      inputs: { image: "subject.png" },
+      _meta: { title: "Cut-out subject" },
+    },
     "21": {
       class_type: "TencentImageToModelNode",
       inputs: {
         model: "3.1",
-        image: ["5", 0],
+        image: ["1", 0],
         face_count: 10000,
         generate_type: "Geometry",
         seed: 0,

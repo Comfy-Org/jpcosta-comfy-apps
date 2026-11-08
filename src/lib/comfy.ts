@@ -169,6 +169,13 @@ export async function fetchJob(target: DeploymentTarget, id: string): Promise<Jo
   return mapJob((await res.json()) as RawJob);
 }
 
+/** GET a JSON route on this deployment. Callers that need a missing route can catch a 404. */
+export async function fetchDeploymentJson(target: DeploymentTarget, pathname: string): Promise<unknown> {
+  const res = await comfyFetch(target, pathname, { method: "GET" }, 20_000);
+  if (!res.ok) await throwEnvelope(target, res);
+  return res.json();
+}
+
 export async function fetchAssetUrl(target: DeploymentTarget, id: string): Promise<string> {
   const res = await comfyFetch(target, `/api/v2/assets/${encodeURIComponent(id)}`, { method: "GET" }, 20_000);
   if (!res.ok) await throwEnvelope(target, res);

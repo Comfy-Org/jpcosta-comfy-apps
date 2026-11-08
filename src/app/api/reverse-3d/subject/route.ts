@@ -1,12 +1,21 @@
-import { fetchAssetUrl, submitJob, uploadAsset } from "@/lib/comfy";
-import { deploymentTarget } from "@/lib/deployments";
+import { fetchAssetUrl, fetchDeploymentJson, fetchJob, submitJob, uploadAsset } from "@/lib/comfy";
+import { deploymentTarget, type DeploymentTarget } from "@/lib/deployments";
 import { apiKey, isMockMode, missingKeyMessage } from "@/lib/env";
 import { AppError, errorResponse } from "@/lib/http";
 import { publicRouteId } from "@/lib/ids";
 import { prepareImage } from "@/lib/images";
 import { blockFigureMesh, decodeGlb, reduceMesh } from "@/lib/mesh-reduce";
 import { verifyAssetSignature } from "@/lib/signing";
-import { buildMeshWorkflow, buildPickWorkflow, parseSubjectChoice, SUBJECT_FRAME_CAP } from "@/lib/subject-pipeline";
+import {
+  backgroundModelName,
+  buildCutoutWorkflow,
+  buildHunyuanWorkflow,
+  buildPickWorkflow,
+  comboOptions,
+  parseSubjectChoice,
+  SUBJECT_FRAME_CAP,
+} from "@/lib/subject-pipeline";
+import type { JobView } from "@/lib/types";
 import { assetRef, type Workflow } from "@/lib/workflow";
 
 export const runtime = "nodejs";
@@ -27,6 +36,76 @@ function wireImage(workflow: Workflow, nodeId: string, id: string, filePath: str
   const node = workflow[nodeId];
   if (!node) throw new AppError(500, "internal", "The subject workflow is missing an image input.");
   node.inputs.image = assetRef(id, filePath);
+}
+
+/**
+ * The background-removal deployment is the one that ships `models/background_removal`.
+ * Reverse 3D is partner-only, so its combo for this input is empty.
+ */
+async function listedBackgroundModels(target: DeploymentTarget): Promise<string[]> {
+  const paths = ["/object_info/LoadBackgroundRemovalModel", "/api/object_info/LoadBackgroundRemovalModel"];
+  let saw = false;
+  for (const pathname of paths) {
+    try {
+      const body = await fetchDeploymentJson(target, pathname);
+      saw = true;
+      const names = comboOptions(body, "bg_removal_name");
+      if (names.length > 0) return names;
+    } catch (error) {
+      if (error instanceof AppError && (error.status === 404 || error.status === 405)) continue;
+      throw error;
+    }
+  }
+  if (!saw) throw new AppError(502, "upstream_error", "Could not read the background-removal model list.");
+  throw new AppError(
+    502,
+    "upstream_error",
+    "The background-removal deployment lists no background-removal model, so no filename can be validated.",
+  );
+}
+
+function modelFromList(listed: readonly string[]): string {
+  try {
+    return backgroundModelName(listed);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "That deployment lists no background-removal model.";
+    throw new AppError(502, "upstream_error", message);
+  }
+}
+
+async function waitForCutout(target: DeploymentTarget, jobId: string): Promise<JobView> {
+  const started = Date.now();
+  for (;;) {
+    const job = await fetchJob(target, jobId);
+    if (job.status === "succeeded") return job;
+    if (job.status === "failed" || job.status === "canceled" || job.status === "expired") {
+      throw new AppError(502, job.error?.code || "upstream_error", job.error?.message || "The background cut-out failed.");
+    }
+    if (Date.now() - started > 40_000) {
+      throw new AppError(504, "timeout", "The background cut-out is still running. Run again in a moment.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+}
+
+function cutoutOutputId(job: JobView): string {
+  const image =
+    job.outputs.find((output) => output.nodeId === "6") ??
+    job.outputs.find((output) => /\.(png|webp|jpe?g)$/i.test(output.name)) ??
+    job.outputs[0];
+  if (!image) throw new AppError(502, "upstream_error", "The background cut-out did not return an image.");
+  return image.id;
+}
+
+async function downloadAsset(target: DeploymentTarget, id: string): Promise<Buffer> {
+  const signed = await fetchAssetUrl(target, id);
+  const upstream = await fetch(signed, { redirect: "follow", signal: AbortSignal.timeout(60_000) });
+  if (!upstream.ok) throw new AppError(502, "upstream_error", "Could not download the cut-out.");
+  const bytes = Buffer.from(await upstream.arrayBuffer());
+  if (bytes.byteLength === 0 || bytes.byteLength > 20 * 1024 * 1024) {
+    throw new AppError(502, "upstream_error", "Could not download the cut-out.");
+  }
+  return bytes;
 }
 
 function meshPayload(reduced: ReturnType<typeof reduceMesh>, frame: number, subject: string, time: number) {
@@ -93,7 +172,8 @@ export async function POST(request: Request) {
           mock: true,
           ...meshPayload(reduced, choice.frame, choice.subject, times[choice.frame] ?? 0),
           pick: workflow,
-          mesh: buildMeshWorkflow(),
+          mesh: buildHunyuanWorkflow(),
+          cutout: buildCutoutWorkflow(backgroundModelName(["birefnet.safetensors"])),
         });
       }
       const target = deploymentTarget("reverse-3d");
@@ -107,16 +187,36 @@ export async function POST(request: Request) {
       return Response.json({ step: "pick", jobId: publicRouteId("reverse-3d", jobId) });
     }
 
-    const workflow = buildMeshWorkflow();
     if (mock) {
       const reduced = reduceMesh(blockFigureMesh());
-      return Response.json({ mock: true, ...meshPayload(reduced, 0, "The main subject", times[0] ?? 0), mesh: workflow });
+      return Response.json({
+        mock: true,
+        ...meshPayload(reduced, 0, "The main subject", times[0] ?? 0),
+        mesh: buildHunyuanWorkflow(),
+        cutout: buildCutoutWorkflow(backgroundModelName(["birefnet.safetensors"])),
+      });
     }
-    const target = deploymentTarget("reverse-3d");
+    if (!apiKey("background-removal")) {
+      throw new AppError(500, "missing_key", missingKeyMessage("background-removal"));
+    }
+    const cutoutTarget = deploymentTarget("background-removal");
+    const meshTarget = deploymentTarget("reverse-3d");
+    const modelName = modelFromList(await listedBackgroundModels(cutoutTarget));
+    const cutout = buildCutoutWorkflow(modelName);
     const png = await prepareImage(files[0], FRAME_SIDE);
-    const id = await uploadAsset(target, png, "subject.png", "image/png");
-    wireImage(workflow, "1", id, "subject.png");
-    const jobId = await submitJob(target, { workflow, extra_data: { api_key_comfy_org: key ?? "" } }, crypto.randomUUID());
+    const cutoutAsset = await uploadAsset(cutoutTarget, png, "subject.png", "image/png");
+    wireImage(cutout, "1", cutoutAsset, "subject.png");
+    const cutoutJob = await submitJob(cutoutTarget, { workflow: cutout }, crypto.randomUUID());
+    const finished = await waitForCutout(cutoutTarget, cutoutJob);
+    const cutoutBytes = await downloadAsset(cutoutTarget, cutoutOutputId(finished));
+    const hunyuan = buildHunyuanWorkflow();
+    const subjectAsset = await uploadAsset(meshTarget, cutoutBytes, "subject.png", "image/png");
+    wireImage(hunyuan, "1", subjectAsset, "subject.png");
+    const jobId = await submitJob(
+      meshTarget,
+      { workflow: hunyuan, extra_data: { api_key_comfy_org: key ?? "" } },
+      crypto.randomUUID(),
+    );
     return Response.json({ step: "mesh", jobId: publicRouteId("reverse-3d", jobId) });
   } catch (error) {
     return errorResponse(error);

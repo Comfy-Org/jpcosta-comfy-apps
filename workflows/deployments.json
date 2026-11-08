@@ -79,7 +79,7 @@
       "releaseId": "acbce500-45a8-4d0c-90bc-a905a134e401",
       "env": "COMFY_BASE_URL_REVERSE_3D",
       "keyEnv": "COMFY_API_KEY_TEAM",
-      "note": "Comfy team workspace. Auth only COMFY_API_KEY_TEAM. Partner-only Kling playblast."
+      "note": "Comfy team workspace. Auth only COMFY_API_KEY_TEAM. Partner-only Kling playblast. models/background_removal is empty, so LoadBackgroundRemovalModel's combo is []. Cut-outs run on background-removal."
     }
   }
 }
