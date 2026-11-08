@@ -29,6 +29,8 @@ type RawOutput = {
   id?: string;
   node_id?: string;
   name?: string;
+  type?: string;
+  content_type?: string;
 };
 
 type RawJob = {
@@ -147,6 +149,8 @@ export function mapJob(job: RawJob): JobView {
       id: item.id as string,
       nodeId: typeof item.node_id === "string" ? item.node_id : "",
       name: typeof item.name === "string" ? item.name : "",
+      ...(typeof item.type === "string" && item.type ? { type: item.type } : {}),
+      ...(typeof item.content_type === "string" && item.content_type ? { contentType: item.content_type } : {}),
     }));
   const value = job.progress?.value;
   const progress = typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : null;

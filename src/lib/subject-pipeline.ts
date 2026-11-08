@@ -174,9 +174,10 @@ export function buildCutoutWorkflow(modelName: string): Workflow {
 }
 
 /**
- * Hunyuan3D on the Reverse 3D deployment.
+ * Hunyuan3D on the Reverse 3D deployment, then SaveGLB.
  * That host is partner-only, so this graph has no `LoadBackgroundRemovalModel`.
- * Node 21 is the job output, same slot the playblast graph uses for its save.
+ * Live catalog: Tencent output 0 is the legacy STRING, output 1 is FILE_3D_GLB.
+ * SaveGLB is node 21, the same output slot the public job filter keeps.
  */
 export function buildHunyuanWorkflow(): Workflow {
   return {
@@ -185,7 +186,7 @@ export function buildHunyuanWorkflow(): Workflow {
       inputs: { image: "subject.png" },
       _meta: { title: "Cut-out subject" },
     },
-    "21": {
+    "22": {
       class_type: "TencentImageToModelNode",
       inputs: {
         model: "3.1",
@@ -196,24 +197,40 @@ export function buildHunyuanWorkflow(): Workflow {
       },
       _meta: { title: "Hunyuan3D image to model" },
     },
+    "21": {
+      class_type: "SaveGLB",
+      inputs: {
+        mesh: ["22", 1],
+        filename_prefix: "reverse-3d/mesh",
+      },
+      _meta: { title: "Save the GLB" },
+    },
   };
 }
 
-export type NamedOutput = { id: string; name: string; sig?: string };
+export type NamedOutput = {
+  id: string;
+  name: string;
+  sig?: string;
+  /** Comfy API v2 Output.type. A GLB is `file`, not a separate 3D kind. */
+  type?: string;
+  contentType?: string;
+};
 
-const NOT_A_MESH = /\.(png|jpe?g|webp|gif|txt|mp4|webm|mov|obj|mtl|json)$/i;
+const NOT_MESH_TYPE = new Set(["image", "video", "audio", "text", "latent"]);
+
+function isCommittedGlb(item: NamedOutput): boolean {
+  if (!item.id || (item.type && NOT_MESH_TYPE.has(item.type))) return false;
+  if (/\.glb$/i.test(item.name)) return true;
+  return Boolean(item.contentType && /gltf-binary|model\/gltf(?:\+json)?/i.test(item.contentType));
+}
 
 /**
- * The GLB from a Hunyuan job. A preview image is not a mesh and is not used.
- * Returns null when the job has no mesh file, so the caller can say so.
+ * A committed GLB asset. An empty list, a preview image, or any other file is not a mesh.
+ * The paid job that returned `outputs: []` stays null: nothing here invents a download.
  */
 export function selectMeshOutput(outputs: readonly NamedOutput[]): NamedOutput | null {
-  const glb = outputs.find((item) => /\.glb$/i.test(item.name));
-  if (glb) return glb;
-  const named = outputs.find((item) => item.name === "GLB" || /glb/i.test(item.name));
-  if (named && !NOT_A_MESH.test(named.name)) return named;
-  const other = outputs.find((item) => item.name.length > 0 && !NOT_A_MESH.test(item.name));
-  return other ?? null;
+  return outputs.find((item) => isCommittedGlb(item)) ?? null;
 }
 
 /** SaveText file from the frame-choice job. Skips image outputs on the same node. */

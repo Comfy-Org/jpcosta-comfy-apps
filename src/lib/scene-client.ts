@@ -34,7 +34,7 @@ type SubjectPayload = {
 type JobPayload = {
   status?: string;
   error?: { message?: string } | null;
-  outputs?: { id: string; name: string; sig?: string }[];
+  outputs?: { id: string; name: string; sig?: string; type?: string; contentType?: string }[];
 };
 
 /**
@@ -210,7 +210,9 @@ export async function requestSubjectModel(
   if (!meshJob.jobId) throw new Error("Could not build a 3D subject from that clip.");
   const done = await pollJob(meshJob.jobId);
   const output = selectMeshOutput(done.outputs ?? []);
-  if (!output?.sig) throw new Error("Hunyuan did not return a GLB mesh.");
+  if (!output?.sig) {
+    throw new Error("Hunyuan finished without a committed GLB file, so this job cannot be downloaded.");
+  }
   onStatus?.("Loading the mesh…");
   const reducedResponse = await fetch(`/api/reverse-3d/subject?output=${encodeURIComponent(output.id)}&sig=${output.sig}`);
   const reduced = await readJson<SubjectPayload>(reducedResponse);

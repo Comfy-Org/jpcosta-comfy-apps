@@ -1,0 +1,25 @@
+{
+  "completed_at": "2026-11-08T05:56:13.05582Z",
+  "created_at": "2026-11-08T05:54:46.062367Z",
+  "deployment_id": "dep-a166b403-62ba-4598-adeb-708471c20c8c",
+  "error": null,
+  "expires_at": "0001-01-01T00:00:00Z",
+  "id": "0e2ec516-de9d-4438-8eb6-0da9d810d4d4",
+  "outputs": [],
+  "progress": {
+    "nodes_done": 2,
+    "nodes_total": 2,
+    "value": 1
+  },
+  "queue_position": null,
+  "release_id": "acbce500-45a8-4d0c-90bc-a905a134e401",
+  "release_version": 1,
+  "started_at": "2026-11-08T05:54:46.684382Z",
+  "status": "succeeded",
+  "urls": {
+    "cancel": "/api/v2/jobs/0e2ec516-de9d-4438-8eb6-0da9d810d4d4/cancel",
+    "events": "/api/v2/jobs/0e2ec516-de9d-4438-8eb6-0da9d810d4d4/events",
+    "logs": "/api/v2/jobs/0e2ec516-de9d-4438-8eb6-0da9d810d4d4/logs",
+    "self": "/api/v2/jobs/0e2ec516-de9d-4438-8eb6-0da9d810d4d4"
+  }
+}

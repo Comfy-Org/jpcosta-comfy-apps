@@ -11,6 +11,9 @@ export type JobOutput = {
   id: string;
   nodeId: string;
   name: string;
+  /** Comfy API v2 `Output.type`: image, video, audio, text, file, or latent. */
+  type?: string;
+  contentType?: string;
   /** HMAC of `id`. Present on responses from GET /api/jobs. Required to download. */
   sig?: string;
 };
