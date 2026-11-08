@@ -27,8 +27,8 @@ const page = readFileSync(path.join(dir, "index.html"), "utf8")
       "\n</script>",
   );
 const targets = [
-  "/opt/cursor/artifacts/avengers-block-detail.html",
-  path.join(dir, "avengers-block-detail.html"),
+  "/opt/cursor/artifacts/avengers-visual-presets.html",
+  path.join(dir, "avengers-visual-presets.html"),
 ];
 for (const target of targets) writeFileSync(target, page);
 console.log("standalone bytes", page.length);

@@ -1,45 +1,36 @@
 // @ts-nocheck
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DETAIL_CELLS, largePieceTriangles, simplifyMesh } from "../demo/block-glb-viewer/lod.mjs";
+import { buildVideoReferencePayload } from "../demo/block-glb-viewer/presets.mjs";
 import { encodeGlb } from "../src/lib/mesh-reduce.ts";
 
 const demo = path.join(path.dirname(fileURLToPath(import.meta.url)), "../demo/block-glb-viewer");
 const viewerSource = readFileSync(path.join(demo, "viewer.js"), "utf8");
 const pageSource = readFileSync(path.join(demo, "index.html"), "utf8");
 assert.equal(viewerSource.includes("buildBoxMesh"), false);
+assert.equal(viewerSource.includes("simplifyMesh"), false);
 assert.equal(viewerSource.includes("GLTFLoader"), true);
-assert.equal(pageSource.includes("fill columns"), true);
-assert.equal(pageSource.includes("Mais simples"), true);
-assert.equal(pageSource.includes("Mais detalhado"), true);
+assert.equal(pageSource.includes("Blocos cinza"), true);
+assert.equal(pageSource.includes("Blocos coloridos"), true);
+assert.equal(pageSource.includes("Clay"), true);
+assert.equal(pageSource.includes("Guardar referência"), true);
+assert.equal(pageSource.includes("Mais simples"), false);
 
-const wholeScene = "/tmp/whole-scene/avengers-whole-scene-hunyuan-original.glb";
-if (existsSync(wholeScene)) {
-  const buf = readFileSync(wholeScene);
-  const jsonLen = buf.readUInt32LE(12);
-  const json = JSON.parse(buf.subarray(20, 20 + jsonLen).toString("utf8"));
-  const bin = buf.subarray(20 + jsonLen + 8);
-  const prim = json.meshes[0].primitives[0];
-  const positionAccessor = json.accessors[prim.attributes.POSITION];
-  const indexAccessor = json.accessors[prim.indices];
-  const positionView = json.bufferViews[positionAccessor.bufferView];
-  const indexView = json.bufferViews[indexAccessor.bufferView];
-  const sourcePositions = new Float32Array(bin.buffer, bin.byteOffset + positionView.byteOffset, positionAccessor.count * 3);
-  const sourceIndices = new Uint16Array(bin.buffer, bin.byteOffset + indexView.byteOffset, indexAccessor.count);
-  const full = simplifyMesh(sourcePositions, sourceIndices, 0);
-  assert.equal(full.triangles, 10004);
-  assert.equal(full.positions, sourcePositions);
-  const counts = DETAIL_CELLS.map((cell) => simplifyMesh(sourcePositions, sourceIndices, cell).triangles);
-  for (let i = 1; i < counts.length; i += 1) assert.ok(counts[i] > counts[i - 1]);
-  const coarse = simplifyMesh(sourcePositions, sourceIndices, DETAIL_CELLS[0]);
-  const pieces = largePieceTriangles(coarse.positions, coarse.indices, 30);
-  assert.ok(pieces.length >= 4);
-  assert.ok(pieces[3] > 100, `fourth body collapsed to ${pieces[3]} triangles`);
-}
+const payload = buildVideoReferencePayload({
+  style: "clay",
+  referencePng: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+  videoName: "original-video",
+});
+assert.equal(payload.called, false);
+assert.equal(payload.fields.style, "clay");
+assert.equal(payload.fields.camera, "source-plus-z");
+assert.equal(payload.fields.video, "original-video");
+assert.equal(payload.fields.referenceImage.byteLength, 32);
+assert.throws(() => buildVideoReferencePayload({ style: "detalhe", referencePng: new Uint8Array(32) }));
 
 const positions = new Float32Array([
   -1, 0, 0, 1, 0, 0, 0, 1, 0,

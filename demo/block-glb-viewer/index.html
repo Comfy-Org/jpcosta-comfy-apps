@@ -1,23 +1,27 @@
 <!doctype html>
-<html lang="en">
+<html lang="pt">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Block scene GLB viewer</title>
+    <title>Referência visual</title>
     <style>
       :root { color: #211927; background: #f4f1ea; font-family: Inter, ui-sans-serif, sans-serif; }
       body { margin: 0; }
-      header { padding: 14px 18px 0; max-width: 1100px; }
+      header, .row, .note { padding: 12px 18px 0; max-width: 1100px; }
       h1 { font-size: 18px; margin: 0 0 6px; font-weight: 600; }
-      p { margin: 0; font-size: 13px; line-height: 1.45; max-width: 78ch; }
-      .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 18px; font-size: 13px; }
-      .stage { display: grid; grid-template-columns: 1fr 1.2fr; gap: 12px; padding: 0 18px 18px; align-items: start; }
-      .stage:has(#reference[hidden]) { grid-template-columns: 1fr; }
+      p, .note { margin: 0; font-size: 13px; line-height: 1.45; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-bottom: 12px; }
+      button, .file { font: inherit; border: 1px solid #c9c2b8; background: #fff; border-radius: 8px; padding: 6px 10px; }
+      .file { cursor: pointer; }
+      button[aria-pressed="true"] { background: #211927; color: #f4f1ea; }
+      .stage { display: grid; grid-template-columns: 220px 1fr; gap: 12px; padding: 0 18px 18px; align-items: start; }
+      @media (max-width: 800px) { .stage { grid-template-columns: 1fr; } }
+      figure { margin: 0; }
       img, canvas { width: 100%; border-radius: 8px; background: #2a2a2e; display: block; }
-      canvas { height: 640px; }
+      canvas { height: min(70vh, 640px); }
       figcaption { font-size: 12px; margin-top: 4px; }
       figure:has(img[hidden]) { display: none; }
-      #stats { font-variant-numeric: tabular-nums; }
+      #style-reference { background: #2a2a2e; }
     </style>
     <script type="importmap">
       {
@@ -29,31 +33,38 @@
   </head>
   <body>
     <header>
-      <h1>Generated block-scene GLB</h1>
+      <h1>Escolher o acabamento</h1>
       <p>
-        Isolated viewer. It draws the file's own triangles with a plain gray material.
-        It does not voxelize, fill columns, or invent a mesh. Orbit the volume that is actually in the GLB.
+        A forma é sempre a mesma. Arraste para explorar; isso não muda a imagem que segue para o vídeo.
+        A referência fica na câmara de frente. O vídeo original continua a guiar o movimento. Ainda não foi gerado nenhum vídeo.
       </p>
     </header>
     <div class="row">
-      <label>GLB <input id="file" type="file" accept=".glb,.gltf,model/gltf-binary" /></label>
-      <label>Mais simples <input id="detail" type="range" min="0" max="4" step="1" value="4" /> Mais detalhado</label>
-      <button id="front" type="button">Frente</button>
-      <button id="reset" type="button">Repor</button>
-      <button id="capture" type="button">Guardar vista</button>
-      <span id="status">Waiting for the Hunyuan GLB. No geometry is invented.</span>
-      <span id="stats"></span>
+      <label class="file">Abrir modelo<input id="file" type="file" accept=".glb,.gltf,model/gltf-binary" hidden /></label>
+      <button type="button" data-style="blocos-cinza" aria-pressed="true">Blocos cinza</button>
+      <button type="button" data-style="blocos-coloridos" aria-pressed="false">Blocos coloridos</button>
+      <button type="button" data-style="clay" aria-pressed="false">Clay</button>
+      <button id="reset" type="button">Repor câmara</button>
+      <button id="capture" type="button">Guardar referência</button>
+      <span id="status">À espera do modelo. Nada é inventado.</span>
     </div>
     <div class="stage">
-      <figure>
-        <img id="reference" alt="Referência 2D" hidden />
-        <figcaption>Referência 2D, não é o modelo</figcaption>
-      </figure>
+      <div>
+        <figure>
+          <img id="source-photo" alt="Imagem de partida" hidden />
+          <figcaption>Imagem de partida</figcaption>
+        </figure>
+        <figure>
+          <img id="style-reference" alt="Referência fixa para o vídeo" />
+          <figcaption>Referência para o vídeo · <span id="chosen">Blocos cinza</span></figcaption>
+        </figure>
+      </div>
       <figure>
         <canvas id="view"></canvas>
-        <figcaption>Malha gerada, vista atual</figcaption>
+        <figcaption>Explorar. Não é a câmara do vídeo.</figcaption>
       </figure>
     </div>
+    <p class="note">O gerador ainda não foi testado com esta referência.</p>
     <script type="module" src="./viewer.js"></script>
   </body>
 </html>
