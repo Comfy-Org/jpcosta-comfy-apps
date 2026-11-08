@@ -62,7 +62,7 @@ void main() {
   vec3 n = normalize(vNormal);
   vec3 key = normalize(vec3(0.32, 0.78, 0.48));
   vec3 fill = normalize(vec3(-0.55, 0.25, 0.35));
-  float shade = clamp(0.74 + 0.28 * max(dot(n, key), 0.0) + 0.08 * max(dot(n, fill), 0.0), 0.0, 1.15);
+  float shade = clamp(0.52 + 0.55 * max(dot(n, key), 0.0) + 0.08 * max(dot(n, fill), 0.0), 0.0, 1.05);
   gl_FragColor = vec4(vColor * shade, 1.0);
 }
 `;

@@ -890,9 +890,9 @@ export function AppCard({ app }: { app: CatalogApp }) {
                 <p className="field-note">
                   Subject at {scene.time.toFixed(1)}s.
                   {scene.clear
-                    ? " The background is left out of the mesh."
+                    ? " The background is left out."
                     : " No single subject stood out, so this is the closest shape."}
-                  {scene.rivals > 1 ? " Other separate shapes were left out." : ""} Drag to orbit. Polygon changes stay in the browser.
+                  {scene.rivals > 1 ? " Other separate shapes were left out." : ""} Drag left for bigger boxes. Changes stay in the browser.
                 </p>
               ) : null}
               {control.type === "text" ? (

@@ -2,14 +2,18 @@
  * Browser-side subject mesh for Reverse 3D.
  *
  * The frame score looks for one foreground object that stands apart from the
- * border color. The mesh is an untextured clay volume of that silhouette only:
- * front and back shells inflated by distance from the outline. The background
- * is not in the mesh. Polygon changes only rebuild this volume.
+ * border color. The mesh is a chunky box volume of that silhouette: voxels,
+ * not a smooth sculpt. The finest slider step is still about 30% of a
+ * pixel-dense grid. The background is not in the mesh.
  */
 
 export const SCENE_POLYGON_MIN = 64;
 export const SCENE_POLYGON_MAX = 4096;
-export const SCENE_POLYGON_DEFAULT = 768;
+/** Opens on the finest boxes. Dragging down makes the boxes bigger. */
+export const SCENE_POLYGON_DEFAULT = SCENE_POLYGON_MAX;
+
+/** Finest long-side voxel count, as a fraction of the subject's pixel span. */
+const BOX_DENSE_FRACTION = 0.3;
 
 export const SCENE_DEFAULT_YAW = 1.05;
 export const SCENE_DEFAULT_PITCH = 0.22;
@@ -19,8 +23,8 @@ export const SCENE_DRAG_PITCH = 0.008;
 export const SCENE_PITCH_MIN = -1.05;
 export const SCENE_PITCH_MAX = 1.05;
 
-/** Untextured clay. The still's colors are not copied onto the mesh. */
-export const SCENE_CLAY: readonly [number, number, number] = [0.93, 0.91, 0.87];
+/** Flat gray boxes. The still's colors are not copied onto the mesh. */
+export const SCENE_CLAY: readonly [number, number, number] = [0.7, 0.7, 0.72];
 
 const SUBJECT_MIN_RATIO = 0.015;
 const CLEAR_SCORE = 0.35;
@@ -32,6 +36,8 @@ export type SceneMesh = {
   indices: Uint16Array;
   /** Triangle count of the subject. The floor grid is not included. */
   polygonCount: number;
+  /** Box cells along the subject's longer side. Lower means bigger boxes. */
+  boxesLong: number;
   /** World height of the ground plane under the subject's feet. */
   floorY: number;
 };
@@ -311,7 +317,21 @@ function cross(a: Vec3, b: Vec3): Vec3 {
   return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 }
 
-/** Clay volume of the subject silhouette. Grid resolution follows the slider. */
+function boxGrid(spanX: number, spanY: number, targetPolygons: number): { cols: number; rows: number; depth: number; boxesLong: number } {
+  const long = Math.max(spanX, spanY);
+  const finest = Math.max(6, Math.min(28, Math.round(long * BOX_DENSE_FRACTION)));
+  const coarsest = Math.max(3, Math.round(finest * 0.22));
+  const clamped = Math.max(SCENE_POLYGON_MIN, Math.min(SCENE_POLYGON_MAX, Math.round(targetPolygons)));
+  const t = (clamped - SCENE_POLYGON_MIN) / (SCENE_POLYGON_MAX - SCENE_POLYGON_MIN);
+  const cells = Math.max(coarsest, Math.round(coarsest + t * (finest - coarsest)));
+  const cols = Math.max(1, Math.round((cells * spanX) / long));
+  const rows = Math.max(1, Math.round((cells * spanY) / long));
+  let depth = Math.max(3, Math.min(cols, rows, Math.round(Math.min(cols, rows) * 0.85)));
+  if (depth % 2 === 0) depth = Math.max(3, depth - 1);
+  return { cols, rows, depth, boxesLong: Math.max(cols, rows) };
+}
+
+/** Gray boxes of the subject silhouette. The slider changes the box size, locally. */
 export function buildSceneMesh(
   pixels: Uint8ClampedArray | Uint8Array,
   width: number,
@@ -337,134 +357,137 @@ export function buildSceneMesh(
   }
   const spanX = Math.max(1, maxX - minX);
   const spanY = Math.max(1, maxY - minY);
-  const inside = (col: number, row: number, cols: number, rows: number) => {
-    const x = Math.round(minX + ((col + 0.5) / cols) * spanX);
-    const y = Math.round(minY + ((row + 0.5) / rows) * spanY);
-    const cx = Math.max(0, Math.min(width - 1, x));
-    const cy = Math.max(0, Math.min(height - 1, y));
-    return mask[cy * width + cx] === 1;
-  };
-
-  const clamped = Math.max(SCENE_POLYGON_MIN, Math.min(SCENE_POLYGON_MAX, Math.round(targetPolygons)));
-  let cols = 2;
-  let rows = 2;
-  let bestErr = Number.POSITIVE_INFINITY;
-  let bestCount = -1;
-  for (let guess = 2; guess <= 96; guess += 1) {
-    const nextRows = Math.max(2, Math.round((guess * spanY) / spanX));
-    let quads = 0;
-    for (let row = 0; row < nextRows; row += 1) {
-      for (let col = 0; col < guess; col += 1) {
-        if (inside(col, row, guess, nextRows)) quads += 1;
-      }
-    }
-    const count = quads * 4;
-    const err = Math.abs(count - clamped);
-    if (count > 0 && (err < bestErr || (err === bestErr && count > bestCount))) {
-      bestErr = err;
-      bestCount = count;
-      cols = guess;
-      rows = nextRows;
-    }
-  }
-
+  const { cols, rows, depth, boxesLong } = boxGrid(spanX, spanY, targetPolygons);
   let maxDist = 1;
   for (let index = 0; index < mask.length; index += 1) {
     if (mask[index] && (dist[index] ?? 0) > maxDist) maxDist = dist[index] ?? 1;
   }
-  const vertCols = cols + 1;
-  const vertRows = rows + 1;
-  const shell = vertCols * vertRows;
-  const midX = (minX + maxX) / 2;
-  const midY = (minY + maxY) / 2;
-  const scale = 1.55 / spanY;
-  const depth = Math.min(spanX, spanY) * scale * 0.46;
-  const positions = new Float32Array(shell * 2 * 3);
-  const colors = new Float32Array(shell * 2 * 3);
-  const atPixel = (col: number, row: number) => {
-    const x = minX + (col / cols) * spanX;
-    const y = minY + (row / rows) * spanY;
-    const ix = Math.max(0, Math.min(width - 1, Math.round(x)));
-    const iy = Math.max(0, Math.min(height - 1, Math.round(y)));
-    const on = mask[iy * width + ix] === 1;
-    const rise = on ? Math.pow((dist[iy * width + ix] ?? 0) / maxDist, 0.7) : 0;
-    return {
-      x: (x - midX) * scale,
-      y: (midY - y) * scale,
-      half: rise * depth,
-    };
-  };
-  for (let row = 0; row < vertRows; row += 1) {
-    for (let col = 0; col < vertCols; col += 1) {
-      const point = atPixel(col, row);
-      const front = (row * vertCols + col) * 3;
-      const back = (shell + row * vertCols + col) * 3;
-      positions[front] = point.x;
-      positions[front + 1] = point.y;
-      positions[front + 2] = point.half;
-      positions[back] = point.x;
-      positions[back + 1] = point.y;
-      positions[back + 2] = -point.half;
-      colors[front] = SCENE_CLAY[0];
-      colors[front + 1] = SCENE_CLAY[1];
-      colors[front + 2] = SCENE_CLAY[2];
-      colors[back] = SCENE_CLAY[0];
-      colors[back + 1] = SCENE_CLAY[1];
-      colors[back + 2] = SCENE_CLAY[2];
+  const occupied = new Uint8Array(cols * rows * depth);
+  const cell = (x: number, y: number, z: number) => x + y * cols + z * cols * rows;
+  const mid = (depth - 1) / 2;
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      if (!mask[y * width + x]) continue;
+      const ix = Math.min(cols - 1, Math.floor(((x - minX) * cols) / (spanX + 1)));
+      const iy = Math.min(rows - 1, Math.floor(((y - minY) * rows) / (spanY + 1)));
+      const reach = Math.round(Math.pow((dist[y * width + x] ?? 0) / maxDist, 0.8) * mid);
+      for (let z = mid - reach; z <= mid + reach; z += 1) occupied[cell(ix, iy, z)] = 1;
     }
   }
+  const filled = (x: number, y: number, z: number) =>
+    x >= 0 && y >= 0 && z >= 0 && x < cols && y < rows && z < depth && occupied[cell(x, y, z)] === 1;
 
-  const frontOf = (col: number, row: number) => row * vertCols + col;
-  const backOf = (col: number, row: number) => shell + row * vertCols + col;
+  const cube = 1.55 / rows;
+  const inset = cube * 0.04;
+  const originX = (-cols * cube) / 2;
+  const originY = (-rows * cube) / 2;
+  const originZ = (-depth * cube) / 2;
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const colors: number[] = [];
   const indexList: number[] = [];
-  for (let row = 0; row < rows; row += 1) {
-    for (let col = 0; col < cols; col += 1) {
-      if (!inside(col, row, cols, rows)) continue;
-      const a = frontOf(col, row);
-      const b = frontOf(col + 1, row);
-      const d = frontOf(col, row + 1);
-      const e = frontOf(col + 1, row + 1);
-      indexList.push(a, d, e, a, e, b);
-      const ba = backOf(col, row);
-      const bb = backOf(col + 1, row);
-      const bd = backOf(col, row + 1);
-      const be = backOf(col + 1, row + 1);
-      indexList.push(ba, be, bd, ba, bb, be);
+  const pushFace = (quad: Vec3[], normal: Vec3) => {
+    const base = positions.length / 3;
+    for (const point of quad) {
+      positions.push(point[0], point[1], point[2]);
+      normals.push(normal[0], normal[1], normal[2]);
+      colors.push(SCENE_CLAY[0], SCENE_CLAY[1], SCENE_CLAY[2]);
+    }
+    indexList.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  };
+  for (let z = 0; z < depth; z += 1) {
+    for (let y = 0; y < rows; y += 1) {
+      for (let x = 0; x < cols; x += 1) {
+        if (!filled(x, y, z)) continue;
+        const x0 = originX + x * cube + inset;
+        const x1 = originX + (x + 1) * cube - inset;
+        const y0 = originY + (rows - y - 1) * cube + inset;
+        const y1 = originY + (rows - y) * cube - inset;
+        const z0 = originZ + z * cube + inset;
+        const z1 = originZ + (z + 1) * cube - inset;
+        if (!filled(x, y, z + 1)) {
+          pushFace(
+            [
+              [x0, y1, z1],
+              [x0, y0, z1],
+              [x1, y0, z1],
+              [x1, y1, z1],
+            ],
+            [0, 0, 1],
+          );
+        }
+        if (!filled(x, y, z - 1)) {
+          pushFace(
+            [
+              [x0, y1, z0],
+              [x1, y1, z0],
+              [x1, y0, z0],
+              [x0, y0, z0],
+            ],
+            [0, 0, -1],
+          );
+        }
+        if (!filled(x, y + 1, z)) {
+          pushFace(
+            [
+              [x0, y0, z0],
+              [x1, y0, z0],
+              [x1, y0, z1],
+              [x0, y0, z1],
+            ],
+            [0, -1, 0],
+          );
+        }
+        if (!filled(x, y - 1, z)) {
+          pushFace(
+            [
+              [x0, y1, z1],
+              [x1, y1, z1],
+              [x1, y1, z0],
+              [x0, y1, z0],
+            ],
+            [0, 1, 0],
+          );
+        }
+        if (!filled(x + 1, y, z)) {
+          pushFace(
+            [
+              [x1, y0, z1],
+              [x1, y1, z1],
+              [x1, y1, z0],
+              [x1, y0, z0],
+            ],
+            [1, 0, 0],
+          );
+        }
+        if (!filled(x - 1, y, z)) {
+          pushFace(
+            [
+              [x0, y0, z0],
+              [x0, y1, z0],
+              [x0, y1, z1],
+              [x0, y0, z1],
+            ],
+            [-1, 0, 0],
+          );
+        }
+      }
     }
   }
-  if (indexList.length === 0) throw new Error("Could not build a scene mesh.");
-  const indices = new Uint16Array(indexList);
-  const normals = new Float32Array(positions.length);
-  for (let cursor = 0; cursor < indices.length; cursor += 3) {
-    const ia = (indices[cursor] ?? 0) * 3;
-    const ib = (indices[cursor + 1] ?? 0) * 3;
-    const ic = (indices[cursor + 2] ?? 0) * 3;
-    const p0: Vec3 = [positions[ia] ?? 0, positions[ia + 1] ?? 0, positions[ia + 2] ?? 0];
-    const p1: Vec3 = [positions[ib] ?? 0, positions[ib + 1] ?? 0, positions[ib + 2] ?? 0];
-    const p2: Vec3 = [positions[ic] ?? 0, positions[ic + 1] ?? 0, positions[ic + 2] ?? 0];
-    const normal = cross([p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]], [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]]);
-    for (const offset of [ia, ib, ic]) {
-      normals[offset] = (normals[offset] ?? 0) + normal[0];
-      normals[offset + 1] = (normals[offset + 1] ?? 0) + normal[1];
-      normals[offset + 2] = (normals[offset + 2] ?? 0) + normal[2];
-    }
+  if (indexList.length === 0 || indexList.some((index) => index > 65535)) {
+    throw new Error("Could not build a scene mesh.");
   }
-  for (let offset = 0; offset < normals.length; offset += 3) {
-    const length = Math.hypot(normals[offset] ?? 0, normals[offset + 1] ?? 0, normals[offset + 2] ?? 0) || 1;
-    normals[offset] = (normals[offset] ?? 0) / length;
-    normals[offset + 1] = (normals[offset + 1] ?? 0) / length;
-    normals[offset + 2] = (normals[offset + 2] ?? 0) / length;
-  }
-
   let floorY = Number.POSITIVE_INFINITY;
-  const seen = new Uint8Array(shell * 2);
-  for (const index of indices) seen[index] = 1;
-  for (let index = 0; index < seen.length; index += 1) {
-    if (!seen[index]) continue;
-    const y = positions[index * 3 + 1] ?? 0;
-    if (y < floorY) floorY = y;
-  }
-  return { positions, normals, colors, indices, polygonCount: indices.length / 3, floorY };
+  for (let index = 1; index < positions.length; index += 3) floorY = Math.min(floorY, positions[index] ?? 0);
+  return {
+    positions: new Float32Array(positions),
+    normals: new Float32Array(normals),
+    colors: new Float32Array(colors),
+    indices: new Uint16Array(indexList),
+    polygonCount: indexList.length / 3,
+    boxesLong,
+    floorY,
+  };
 }
 
 export type { Vec3 };

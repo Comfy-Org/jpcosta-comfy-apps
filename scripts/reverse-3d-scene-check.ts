@@ -167,14 +167,17 @@ async function main() {
   assert.equal(pickBestSubjectIndex([subjectRead.score, crowdRead.score, subjectRead.score]), 0);
   assert.equal(pickBestSubjectIndex([1, 4, 4, 2]), 1);
 
-  const counts = [64, 256, 768, 2048, 4096].map((target) => buildSceneMesh(subject, 48, 27, target).polygonCount);
-  for (let index = 1; index < counts.length; index += 1) assert.ok(counts[index] >= counts[index - 1]);
-  assert.ok(counts[counts.length - 1] > counts[0] * 8);
-  const low = buildSceneMesh(subject, 48, 27, 128);
-  const high = buildSceneMesh(subject, 48, 27, 3072);
-  assert.ok(high.polygonCount > low.polygonCount * 4);
-  assert.ok(high.positions.length > low.positions.length);
-  assert.ok(Math.abs(low.polygonCount - 128) / 128 < 0.35, `polygon count ${low.polygonCount}`);
+  const steps = [64, 256, 768, 2048, 4096].map((target) => buildSceneMesh(subject, 48, 27, target));
+  for (let index = 1; index < steps.length; index += 1) {
+    assert.ok(steps[index].boxesLong >= steps[index - 1].boxesLong);
+    assert.ok(steps[index].polygonCount >= steps[index - 1].polygonCount);
+  }
+  const low = steps[0];
+  const high = steps[steps.length - 1];
+  assert.ok(high.boxesLong > low.boxesLong, `boxes ${low.boxesLong} → ${high.boxesLong}`);
+  assert.ok(high.polygonCount > low.polygonCount);
+  assert.ok(high.boxesLong <= Math.ceil(19 * 0.32), `finest boxes ${high.boxesLong} are denser than 30% of the subject`);
+  assert.ok(low.boxesLong <= Math.ceil(high.boxesLong * 0.55));
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
@@ -197,6 +200,10 @@ async function main() {
     maxY = Math.max(maxY, y);
     minZ = Math.min(minZ, z);
     maxZ = Math.max(maxZ, z);
+    const nx = Math.abs(low.normals[offset] ?? 0);
+    const ny = Math.abs(low.normals[offset + 1] ?? 0);
+    const nz = Math.abs(low.normals[offset + 2] ?? 0);
+    assert.ok(Math.max(nx, ny, nz) > 0.99, `normal is not a box face ${nx} ${ny} ${nz}`);
     if (z > 0.05) frontNormal += low.normals[offset + 2] ?? 0;
     if (z < -0.05) backNormal += low.normals[offset + 2] ?? 0;
     assert.ok(Math.abs((low.colors[offset] ?? 0) - SCENE_CLAY[0]) < 0.001);
@@ -204,7 +211,7 @@ async function main() {
   }
   const aspect = (maxX - minX) / Math.max(0.001, maxY - minY);
   assert.ok(aspect < 1.7, `subject aspect ${aspect} still looks like the whole frame`);
-  assert.ok(maxZ - minZ > 0.28 * (maxY - minY), `thickness ${maxZ - minZ} vs height ${maxY - minY}`);
+  assert.ok(maxZ - minZ > 0.2, `thickness ${maxZ - minZ}`);
   assert.ok(minZ < -0.05 && maxZ > 0.05, `volume z ${minZ}..${maxZ}`);
   assert.ok(frontNormal > 0 && backNormal < 0, `normals front ${frontNormal} back ${backNormal}`);
   assert.ok(Math.abs(low.floorY - minY) < 1e-4);
@@ -250,7 +257,7 @@ async function main() {
   assert.ok(resting.visible && turned.visible, JSON.stringify({ resting, turned }));
   assert.ok(Math.abs(resting.x - turned.x) > 15, JSON.stringify({ resting, turned, dragged }));
   console.log(
-    `polygon slider ${counts.join(" → ")}; orbit x ${resting.x.toFixed(1)} → ${turned.x.toFixed(1)} after a 140px drag`,
+    `boxes ${steps.map((mesh) => mesh.boxesLong).join(" → ")}; triangles ${steps.map((mesh) => mesh.polygonCount).join(" → ")}; orbit x ${resting.x.toFixed(1)} → ${turned.x.toFixed(1)} after a 140px drag`,
   );
 
   assert.equal(durationOverCap(10.2, 10), false);
