@@ -8,6 +8,7 @@ import { requestPlayblastLook } from "@/lib/scene-client";
 import { TERMINAL_STATUSES, type JobView } from "@/lib/types";
 import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
 import { VideoSplit } from "@/components/reverse-3d-steps";
+import { ComfyLogo } from "@/components/unrender/comfy-logo";
 import { PageUnrender } from "@/components/unrender/page-unrender";
 
 /**
@@ -769,11 +770,6 @@ export function UnrenderApp() {
                 </button>
               </div>
             )}
-            {stage === "idle" && !shotUrl ? (
-              <button type="button" className="ur-link ur-demo" onClick={() => void runDemo()}>
-                Or watch the page un-render the example
-              </button>
-            ) : null}
             {note && !busy && stage !== "gate" && stage !== "confirm" ? (
               <p className="ur-note" role="status">
                 {note}
@@ -840,16 +836,11 @@ export function UnrenderApp() {
             <a href="https://x.com/jp_costa" target="_blank" rel="noopener noreferrer">
               JP Costa
             </a>
-            . Powered by{" "}
-            <a href="https://comfy.org/platform/comfy-api/" target="_blank" rel="noopener noreferrer">
-              ComfyUI
-            </a>{" "}
-            on{" "}
-            <a href="https://cloud.comfy.org/" target="_blank" rel="noopener noreferrer">
-              Comfy Cloud
-            </a>
-            .
           </p>
+          <a className="ur-powered" href="https://comfy.org/" target="_blank" rel="noopener noreferrer" data-b>
+            <span>Powered by</span>
+            <ComfyLogo className="ur-comfy" />
+          </a>
         </footer>
       </div>
 

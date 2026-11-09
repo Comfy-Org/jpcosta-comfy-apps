@@ -20,6 +20,14 @@ const SHOT = "#bfc2c8";
 const CORNER = "#ff8a2a";
 /** How far a tile row eases toward the goal each frame, so a jump in progress still lands tile by tile. */
 const CATCH_UP = 0.12;
+/** The least a tile row moves per frame: about 20 frames per tile, so each tile can be seen resolving. */
+const MIN_STEP = 0.05;
+/**
+ * A tile resolves once, in steps, like a progressive render: coarse pixels full of noise, finer and cleaner each
+ * step, then the clean grey tile. Cells across the tile per step, and the share of cells still noise.
+ */
+const RESOLVE_CELLS = [3, 6, 12, 24];
+const RESOLVE_NOISE = [0.75, 0.5, 0.28, 0.1];
 /** Tiles per frame the shot flips at once its still is in. */
 const SHOT_STEP = 0.4;
 
@@ -41,23 +49,13 @@ export function spiralFrom(cols: number, rows: number, cx: number, cy: number): 
   return tiles.map((tile) => tile.index);
 }
 
-function makeNoise(size: number): HTMLCanvasElement {
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  if (ctx) {
-    const image = ctx.createImageData(size, size);
-    for (let index = 0; index < size * size; index += 1) {
-      const base = 80 + Math.random() * 130;
-      image.data[index * 4] = base + (Math.random() - 0.5) * 70;
-      image.data[index * 4 + 1] = base + (Math.random() - 0.5) * 70;
-      image.data[index * 4 + 2] = base + (Math.random() - 0.5) * 70;
-      image.data[index * 4 + 3] = 255;
-    }
-    ctx.putImageData(image, 0, 0);
-  }
-  return canvas;
+/** A small repeatable random stream, so a tile's noise only changes when its step does. */
+function seeded(seed: number): () => number {
+  let state = seed % 2147483647 || 1;
+  return () => {
+    state = (state * 48271) % 2147483647;
+    return state / 2147483647;
+  };
 }
 
 /** One bar per rendered line of text, from the browser's own line boxes. */
@@ -115,7 +113,7 @@ export class PageUnrender {
   private canvas: HTMLCanvasElement;
   private root: HTMLElement;
   private grey = document.createElement("canvas");
-  private noise: HTMLCanvasElement;
+  private scratch = document.createElement("canvas");
   private blocks: Block[] = [];
   /** Tiles clear of the shot, spiralling out from it. */
   private order: number[] = [];
@@ -142,7 +140,6 @@ export class PageUnrender {
   constructor(canvas: HTMLCanvasElement, root: HTMLElement) {
     this.canvas = canvas;
     this.root = root;
-    this.noise = makeNoise(64);
     this.observer = new ResizeObserver(() => {
       this.dirty = true;
     });
@@ -269,28 +266,28 @@ export class PageUnrender {
     }
   }
 
-  private tick = (now: number) => {
+  private tick = () => {
     this.frame = requestAnimationFrame(this.tick);
     if (this.dirty) this.layout();
     const total = this.order.length;
     const goal = this.goal * total;
     const gap = goal - this.shown;
     if (this.reduce || Math.abs(gap) < 0.02) this.shown = goal;
-    else this.shown += Math.sign(gap) * Math.min(Math.abs(gap), Math.max(0.12, Math.abs(gap) * CATCH_UP));
+    else this.shown += Math.sign(gap) * Math.min(Math.abs(gap), Math.max(MIN_STEP, Math.abs(gap) * CATCH_UP));
     // The shot flips in one quick run once its still is in, and back out with the page.
     const shotTotal = this.shotOrder.length;
     const shotGoal = this.shotReady && this.goal > 0 ? shotTotal : 0;
     const shotGap = shotGoal - this.shotShown;
     if (this.reduce || Math.abs(shotGap) < 0.02) this.shotShown = shotGoal;
     else this.shotShown += Math.sign(shotGap) * Math.min(Math.abs(shotGap), Math.max(SHOT_STEP, Math.abs(shotGap) * CATCH_UP));
-    this.draw(now);
+    this.draw();
     if (!this.filled && this.goal === 1 && this.shown >= total && this.shotShown >= shotTotal) {
       this.filled = true;
       this.onFilled?.();
     }
   };
 
-  private draw(now: number) {
+  private draw() {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     const { dpr, cols } = this;
@@ -312,20 +309,19 @@ export class PageUnrender {
     for (let k = 0; k < done; k += 1) copy(this.order[k]);
     for (let k = 0; k < shotDone; k += 1) copy(this.shotOrder[k]);
     if (this.goal === 0) return;
-    // The next few tiles are "rendering": noise and orange corners, like Cycles.
-    const active: number[] = [];
-    for (let k = done; k < Math.min(done + 3, total); k += 1) active.push(this.order[k]);
-    if (this.shotReady) for (let k = shotDone; k < Math.min(shotDone + 2, shotTotal); k += 1) active.push(this.shotOrder[k]);
+    // One tile at a time is "rendering": it resolves from coarse noisy pixels to the clean grey tile, with
+    // orange corners like Cycles. Then the next one starts.
+    const active: { index: number; share: number }[] = [];
+    if (done < total) active.push({ index: this.order[done], share: this.shown - done });
+    if (this.shotReady && shotDone < shotTotal) active.push({ index: this.shotOrder[shotDone], share: this.shotShown - shotDone });
     if (!active.length) return;
+    for (const { index, share } of active) this.resolve(ctx, index, px, share);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.lineWidth = 2;
     ctx.strokeStyle = CORNER;
-    for (let k = 0; k < active.length; k += 1) {
-      const index = active[k];
+    for (const { index } of active) {
       const x = (index % cols) * tile;
       const y = Math.floor(index / cols) * tile;
-      const offset = this.reduce ? 0 : Math.floor((now / 40 + k * 37) % 64);
-      ctx.drawImage(this.noise, offset, (offset * 7) % 64, 64, 64, x, y, tile, tile);
       const c = Math.min(14, tile / 4);
       ctx.beginPath();
       for (const [ax, ay, dx, dy] of [
@@ -340,5 +336,37 @@ export class PageUnrender {
       }
       ctx.stroke();
     }
+  }
+
+  /** Draws one tile partway resolved: `share` 0 is the coarsest, noisiest step, near 1 the finest. */
+  private resolve(ctx: CanvasRenderingContext2D, index: number, px: number, share: number) {
+    const step = this.reduce ? RESOLVE_CELLS.length - 1 : Math.min(RESOLVE_CELLS.length - 1, Math.max(0, Math.floor(share * RESOLVE_CELLS.length)));
+    const cells = RESOLVE_CELLS[step];
+    const sx = Math.floor((index % this.cols) * px);
+    const sy = Math.floor(Math.floor(index / this.cols) * px);
+    const size = Math.ceil(px) + 1;
+    const scratch = this.scratch;
+    if (scratch.width !== cells) {
+      scratch.width = cells;
+      scratch.height = cells;
+    }
+    const small = scratch.getContext("2d");
+    if (!small) return;
+    small.imageSmoothingEnabled = true;
+    small.drawImage(this.grey, sx, sy, size, size, 0, 0, cells, cells);
+    const random = seeded(index * 7919 + step * 104729 + 17);
+    for (let cell = 0; cell < cells * cells; cell += 1) {
+      if (random() >= RESOLVE_NOISE[step]) continue;
+      const base = 70 + random() * 150;
+      const r = Math.round(base + (random() - 0.5) * 80);
+      const g = Math.round(base + (random() - 0.5) * 80);
+      const b = Math.round(base + (random() - 0.5) * 80);
+      small.fillStyle = `rgb(${r},${g},${b})`;
+      small.fillRect(cell % cells, Math.floor(cell / cells), 1, 1);
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(scratch, 0, 0, cells, cells, sx, sy, size, size);
+    ctx.imageSmoothingEnabled = true;
   }
 }
