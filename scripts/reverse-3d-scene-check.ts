@@ -962,6 +962,8 @@ async function main() {
   assert.match(String(stillBody.still?.["10"]?.inputs?.unet_name), /^qwen_image_edit_2511/);
   assert.equal(stillBody.still?.["14"]?.class_type, "TextEncodeQwenImageEditPlus");
   assert.deepEqual(stillBody.still?.["13"]?.inputs?.image, ["1", 0]);
+  // Comfy Cloud requires every widget: a missing resolution_steps failed validation there.
+  assert.equal(stillBody.still?.["13"]?.inputs?.resolution_steps, 1);
   assert.match(String(stillBody.still?.["14"]?.inputs?.prompt), /never turn an object into a person/);
   assert.match(String(stillBody.still?.["14"]?.inputs?.prompt), /nothing keeps its original color/);
   assert.equal(stillBody.still?.["18"]?.inputs?.steps, 4);

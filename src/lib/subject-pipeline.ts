@@ -768,7 +768,7 @@ export function buildStillWorkflow(): Workflow {
     "12": { class_type: "VAELoader", inputs: { vae_name: "qwen_image_vae.safetensors" }, _meta: { title: "Qwen VAE" } },
     "13": {
       class_type: "ImageScaleToTotalPixels",
-      inputs: { image: ["1", 0], upscale_method: "lanczos", megapixels: 1 },
+      inputs: { image: ["1", 0], upscale_method: "lanczos", megapixels: 1, resolution_steps: 1 },
       _meta: { title: "1 megapixel" },
     },
     "14": {
