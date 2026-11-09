@@ -347,3 +347,4 @@ body:has(.ur) { background: #fff; }
   .ur-shot.reveal,
   .ur-dot { animation: none; }
 }
+.ur-demo { margin-top: 14px; }

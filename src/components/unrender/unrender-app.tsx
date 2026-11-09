@@ -32,6 +32,10 @@ const KEYS_URL = "https://platform.comfy.org/profile/api-keys";
 /** About how long the video job takes, for the tiles while Kling reports no progress. */
 const TYPICAL_SECONDS = 240;
 const POLL_LIMIT_MS = 20 * 60 * 1000;
+/** The demo plays the whole un-render on the example clip with no job and no credits. */
+const DEMO = { clip: "/examples/plaza.mp4", frame: "/examples/plaza.jpg", still: "/examples/plaza-still.jpg", playblast: "/examples/plaza-playblast.mp4" };
+const DEMO_LOOK_MS = 1600;
+const DEMO_RENDER_MS = 16000;
 /** The grey page holds a beat before the playblast wipes in. */
 const FILLED_HOLD_MS = 700;
 
@@ -176,6 +180,8 @@ export function UnrenderApp() {
     // The stored key is read after hydration, so the server and the first client render agree.
     void Promise.resolve().then(() => setKey(readStoredKey()));
     void refreshAccess();
+    // /unrender?demo plays the effect on the example straight away.
+    if (new URLSearchParams(window.location.search).has("demo")) void Promise.resolve().then(() => demoRef.current());
     return () => abortRef.current?.abort();
   }, []);
 
@@ -503,6 +509,43 @@ export function UnrenderApp() {
     await refreshAccess();
   }
 
+  async function runDemo() {
+    if (busy) return;
+    resetShot();
+    setNote(null);
+    setPreview(null);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const clipBlob = await fetch(DEMO.clip).then((response) => response.blob());
+      const file = new File([clipBlob], "plaza.mp4", { type: "video/mp4" });
+      const ready: Clip = { file, url: URL.createObjectURL(file), trimmed: false };
+      setClip(ready);
+      setLook({ frame: DEMO.frame, still: DEMO.still });
+      setStage("look");
+      await sleep(DEMO_LOOK_MS, controller.signal);
+      setStage("render");
+      const started = Date.now();
+      for (;;) {
+        const share = Math.min(1, (Date.now() - started) / DEMO_RENDER_MS);
+        setProgress(share);
+        if (share >= 1) break;
+        await sleep(200, controller.signal);
+      }
+      const blob = await fetch(DEMO.playblast).then((response) => response.blob());
+      const playUrl = URL.createObjectURL(blob);
+      setResult({ jobId: "demo", blob, url: playUrl });
+      setStage("finishing");
+      const compareBlob = await composeSideBySide(playUrl, ready.url).catch(() => null);
+      setResult((current) => (current?.jobId === "demo" ? { ...current, ...(compareBlob ? { compareBlob } : { compareError: "No side by side" }) } : current));
+    } catch {
+      if (controller.signal.aborted) return;
+      setStage("idle");
+    }
+  }
+  const demoRef = useRef(runDemo);
+  demoRef.current = runDemo;
+
   function another() {
     resetShot();
     setPreview((current) => {
@@ -630,6 +673,11 @@ export function UnrenderApp() {
                 </button>
               </div>
             )}
+            {stage === "idle" && !shotUrl ? (
+              <button type="button" className="ur-link ur-demo" onClick={() => void runDemo()}>
+                Or watch the page un-render the example
+              </button>
+            ) : null}
             {note && !busy && stage !== "gate" ? (
               <p className="ur-note" role="status">
                 {note}
