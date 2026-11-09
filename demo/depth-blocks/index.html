@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Depth blocks preview</title>
+    <style>
+      :root { color: #211927; background: #f4f1ea; font-family: Inter, ui-sans-serif, sans-serif; }
+      body { margin: 0; }
+      header { padding: 14px 18px 0; max-width: 1180px; }
+      h1 { font-size: 18px; font-weight: 600; margin: 0 0 6px; }
+      p { margin: 0; font-size: 13px; line-height: 1.45; max-width: 78ch; }
+      .row { display: flex; gap: 12px; align-items: center; padding: 12px 18px; flex-wrap: wrap; }
+      label { font-size: 13px; display: flex; gap: 8px; align-items: center; }
+      input[type="range"] { width: 220px; }
+      button, select { font: inherit; }
+      .stage { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 0 18px 18px; max-width: 1180px; }
+      figure { margin: 0; }
+      figcaption { font-size: 12px; margin-top: 4px; }
+      img, canvas { width: 100%; height: auto; background: #2a2a2e; display: block; border-radius: 8px; }
+      canvas { cursor: grab; touch-action: none; }
+      #readout { font-variant-numeric: tabular-nums; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>2.5D gray blocks from one depth frame</h1>
+      <p>
+        Isolated test. White in the depth image is nearer. Blocks are unprojected on the 512×288 grid.
+        The 40° vertical field is an assumption, not a measured lens. Drag stays inside a small orbit
+        because the back of the scene was never photographed. Gray is the playblast color, so costumes do not separate.
+      </p>
+    </header>
+    <div class="row">
+      <label>Frame
+        <select id="frame">
+          <option value="main">3.750s ensemble</option>
+          <option value="close">1.250s Hulk close-up</option>
+          <option value="late">4.750s ensemble</option>
+        </select>
+      </label>
+      <label>Block size <input id="block" type="range" min="4" max="32" step="2" value="8" /></label>
+      <span id="readout"></span>
+      <button id="reset" type="button">Source camera</button>
+    </div>
+    <div class="stage">
+      <figure>
+        <img id="source" alt="Source frame" />
+        <figcaption>Source frame, same pixels as the depth grid</figcaption>
+      </figure>
+      <figure>
+        <canvas id="view" width="960" height="540"></canvas>
+        <figcaption id="viewcap">Gray blocks at the source camera</figcaption>
+      </figure>
+    </div>
+    <script type="module">
+      import {
+        BLOCK_DEFAULT,
+        buildDepthBoxes,
+        focalLength,
+        lookAt,
+        multiply,
+        orbitCamera,
+        ORBIT_PITCH_LIMIT,
+        ORBIT_YAW_LIMIT,
+        perspective,
+      } from "./depth-scene.mjs";
+
+      const frames = {
+        main: ["assets/main-rgb.png", "assets/main-depth.png"],
+        close: ["assets/rgb-frame030-1250ms.png", "assets/depth-frame030-1250ms.png"],
+        late: ["assets/rgb-frame114-4750ms.png", "assets/depth-frame114-4750ms.png"],
+      };
+      const canvas = document.getElementById("view");
+      const gl = canvas.getContext("webgl", { antialias: true, alpha: false, preserveDrawingBuffer: true });
+      const ext = gl.getExtension("OES_element_index_uint");
+      if (!ext) throw new Error("This browser cannot draw the block index buffer.");
+      const source = document.getElementById("source");
+      const blockInput = document.getElementById("block");
+      const readout = document.getElementById("readout");
+      const viewcap = document.getElementById("viewcap");
+      let yaw = 0;
+      let pitch = 0;
+      let depth = null;
+      let mesh = null;
+
+      const vert = `
+        attribute vec3 aPos;
+        attribute vec3 aNormal;
+        uniform mat4 uMvp;
+        uniform mat4 uModelView;
+        varying vec3 vNormal;
+        void main() {
+          vNormal = mat3(uModelView) * aNormal;
+          gl_Position = uMvp * vec4(aPos, 1.0);
+        }
+      `;
+      const frag = `
+        precision mediump float;
+        varying vec3 vNormal;
+        void main() {
+          vec3 n = normalize(vNormal);
+          float shade = clamp(0.42 + 0.7 * max(dot(n, normalize(vec3(0.25, 0.75, 0.45))), 0.0), 0.0, 1.0);
+          gl_FragColor = vec4(vec3(0.74, 0.74, 0.76) * shade, 1.0);
+        }
+      `;
+      function shader(type, src) {
+        const item = gl.createShader(type);
+        gl.shaderSource(item, src);
+        gl.compileShader(item);
+        if (!gl.getShaderParameter(item, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(item));
+        return item;
+      }
+      const program = gl.createProgram();
+      gl.attachShader(program, shader(gl.VERTEX_SHADER, vert));
+      gl.attachShader(program, shader(gl.FRAGMENT_SHADER, frag));
+      gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+      const posBuf = gl.createBuffer();
+      const norBuf = gl.createBuffer();
+      const idxBuf = gl.createBuffer();
+
+      function upload() {
+        const block = Number(blockInput.value);
+        mesh = buildDepthBoxes(depth, 512, 288, block);
+        gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, mesh.positions, gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, norBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, mesh.normals, gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+        draw();
+      }
+
+      function draw() {
+        const focal = focalLength(288);
+        const camera = orbitCamera(yaw, pitch);
+        const view = lookAt(camera.eye, camera.target, camera.up);
+        const proj = perspective(512, 288, focal);
+        const mvp = multiply(proj, view);
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clearColor(0.16, 0.16, 0.18, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        gl.enable(gl.DEPTH_TEST);
+        gl.useProgram(program);
+        gl.uniformMatrix4fv(gl.getUniformLocation(program, "uMvp"), false, mvp);
+        gl.uniformMatrix4fv(gl.getUniformLocation(program, "uModelView"), false, view);
+        const aPos = gl.getAttribLocation(program, "aPos");
+        const aNormal = gl.getAttribLocation(program, "aNormal");
+        gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+        gl.enableVertexAttribArray(aPos);
+        gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, norBuf);
+        gl.enableVertexAttribArray(aNormal);
+        gl.vertexAttribPointer(aNormal, 3, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+        gl.drawElements(gl.TRIANGLES, mesh.indices.length, gl.UNSIGNED_INT, 0);
+        const atSource = Math.abs(camera.yaw) < 0.001 && Math.abs(camera.pitch) < 0.001;
+        readout.textContent = `${mesh.cells.length} blocks · ${camera.yaw.toFixed(2)} yaw · ${camera.pitch.toFixed(2)} pitch · limit ±${ORBIT_YAW_LIMIT.toFixed(2)} / ±${ORBIT_PITCH_LIMIT.toFixed(2)}`;
+        viewcap.textContent = atSource ? "Gray blocks at the source camera" : "Limited orbit, same blocks";
+      }
+
+      async function loadFrame(key) {
+        const [rgb, depthName] = frames[key];
+        source.src = rgb;
+        const image = await new Promise((resolve, reject) => {
+          const item = new Image();
+          item.onload = () => resolve(item);
+          item.onerror = reject;
+          item.src = depthName;
+        });
+        const scratch = document.createElement("canvas");
+        scratch.width = 512;
+        scratch.height = 288;
+        const ctx = scratch.getContext("2d", { willReadFrequently: true });
+        ctx.drawImage(image, 0, 0, 512, 288);
+        const pixels = ctx.getImageData(0, 0, 512, 288).data;
+        depth = new Uint8Array(512 * 288);
+        for (let i = 0; i < depth.length; i += 1) depth[i] = pixels[i * 4];
+        yaw = 0;
+        pitch = 0;
+        blockInput.value = String(BLOCK_DEFAULT);
+        upload();
+      }
+
+      blockInput.addEventListener("input", upload);
+      document.getElementById("frame").addEventListener("change", (event) => void loadFrame(event.target.value));
+      document.getElementById("reset").addEventListener("click", () => {
+        yaw = 0;
+        pitch = 0;
+        draw();
+      });
+      let drag = null;
+      canvas.addEventListener("pointerdown", (event) => {
+        canvas.setPointerCapture(event.pointerId);
+        drag = { x: event.clientX, y: event.clientY, yaw, pitch };
+      });
+      canvas.addEventListener("pointermove", (event) => {
+        if (!drag) return;
+        const next = orbitCamera(drag.yaw + (event.clientX - drag.x) * 0.005, drag.pitch + (event.clientY - drag.y) * 0.004);
+        yaw = next.yaw;
+        pitch = next.pitch;
+        draw();
+      });
+      canvas.addEventListener("pointerup", () => {
+        drag = null;
+      });
+      void loadFrame("main");
+    </script>
+  </body>
+</html>
