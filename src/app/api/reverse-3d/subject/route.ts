@@ -266,7 +266,8 @@ export async function POST(request: Request) {
       const png = await prepareImage(files[0], FRAME_SIDE);
       const id = await uploadAsset(target, png, "frame.png", "image/png");
       wireImage(workflow, "1", id, "frame.png");
-      const jobId = await submitJob(target, { workflow, extra_data: { api_key_comfy_org: key ?? "" } }, crypto.randomUUID());
+      // Open-source nodes only: no partner key in the job, the key that submits it pays.
+      const jobId = await submitJob(target, { workflow }, crypto.randomUUID());
       return Response.json({ step: "still", jobId: publicRouteId("reverse-3d", jobId) });
     }
 

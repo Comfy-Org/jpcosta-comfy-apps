@@ -401,6 +401,8 @@ export function UnrenderApp() {
       setNote("Drawing the playblast look…");
       const drawn = await requestPlayblastLook(prepared.file, undefined, visitorKey);
       if (controller.signal.aborted) return;
+      // Without the still VACE has no mannequin to copy and renders a detailed sculpture: stop before paying for that.
+      if (!drawn.still) throw new Error(`Could not draw the playblast look: ${drawn.error ?? "the still job failed"}`);
       setLook({ frame: URL.createObjectURL(drawn.frame), still: drawn.still ? URL.createObjectURL(drawn.still) : null });
       setNote(ready.trimmed ? `Using the first ${maxSeconds} seconds of this clip.` : null);
       await render(ready, drawn.still, visitorKey, controller);
@@ -522,9 +524,12 @@ export function UnrenderApp() {
       } else if (recovery) {
         setStage("render");
         await follow(recovery, clip, controller);
-      } else {
-        const still = look?.still ? await fetch(look.still).then((response) => response.blob()) : null;
+      } else if (look?.still) {
+        const still = await fetch(look.still).then((response) => response.blob());
         await render(clip, still, key, controller);
+      } else {
+        // The still never came: start over from the clip, look first.
+        await start(clip.file, key);
       }
     } catch (err) {
       if (controller.signal.aborted) return;

@@ -63,7 +63,7 @@ type SubjectPayload = {
 type JobPayload = {
   status?: string;
   error?: { message?: string } | null;
-  outputs?: { id: string; name: string; sig?: string; type?: string; contentType?: string }[];
+  outputs?: { id: string; name: string; nodeId?: string; sig?: string; type?: string; contentType?: string }[];
 };
 
 /**
@@ -366,6 +366,8 @@ export type PlayblastLook = {
   frame: Blob;
   /** The same frame redrawn as a grey blocking pass, or null when that job did not work. */
   still: Blob | null;
+  /** Why the still did not come, when it did not. */
+  error?: string;
   mock?: boolean;
 };
 
@@ -397,7 +399,7 @@ function mockStill(source: HTMLCanvasElement): Blob {
 /**
  * The playblast's look, before the video job: the first frame goes to one Qwen Image Edit job that redraws it
  * as a rough grey blocking still. The video job gives that still to Wan VACE as its look reference.
- * Only a frame that cannot be read throws. A still that fails comes back as null, and the video runs without it.
+ * Only a frame that cannot be read throws. A still that fails comes back as null with the reason.
  */
 export async function requestPlayblastLook(
   file: File,
@@ -415,14 +417,18 @@ export async function requestPlayblastLook(
     form.append("frame", frame, "frame.jpg");
     const payload = await postSubject(form, onStatus);
     if (payload.mock) return { frame, still: mockStill(canvas), mock: true };
-    if (!payload.jobId) return { frame, still: null };
+    if (!payload.jobId) return { frame, still: null, error: "The still job did not start." };
     const job = await pollJob(payload.jobId, visitorKey);
-    const output = selectImageOutput(job.outputs ?? []);
-    if (!output?.sig) return { frame, still: null };
+    // The still is the only image the job saves (node 3); its name ends in .png on a deployment.
+    const outputs = job.outputs ?? [];
+    const output = selectImageOutput(outputs) ?? outputs.find((item) => item.nodeId === "3") ?? outputs[0];
+    if (!output?.sig) return { frame, still: null, error: "The still job finished without an image." };
     const response = await fetch(`/api/outputs/${output.id}?sig=${output.sig}`, { headers: keyHeaders(visitorKey) });
-    if (!response.ok) return { frame, still: null };
+    if (!response.ok) return { frame, still: null, error: `Could not download the still (${response.status}).` };
     return { frame, still: await asJpeg(await response.blob()) };
-  } catch {
-    return { frame, still: null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn("playblast still failed:", message);
+    return { frame, still: null, error: message };
   }
 }
