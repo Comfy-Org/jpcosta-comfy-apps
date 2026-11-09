@@ -200,6 +200,17 @@ export function VideoSplit({
     return () => observer.disconnect();
   }, [aspect]);
 
+  // A video that read its metadata before React hydrated never fires onLoadedMetadata for us.
+  useEffect(() => {
+    const lead = leadRef.current;
+    const follow = followRef.current;
+    const ready = [lead, follow].find((video) => video && video.readyState >= 1 && video.videoWidth > 0);
+    if (!ready) return;
+    if (ready === lead) shapeFromPlayblast.current = true;
+    const shape = ready.videoWidth / ready.videoHeight;
+    queueMicrotask(() => setAspect(shape));
+  }, [original, playblast]);
+
   useEffect(() => {
     const lead = leadRef.current;
     const follow = followRef.current;

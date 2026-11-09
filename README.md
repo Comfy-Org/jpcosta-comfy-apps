@@ -42,6 +42,10 @@ Server only. Locally that is `.env.local`. On Vercel, project `comfy-api-apps`, 
 | `COMFY_CLOUD_API_KEY` | alias | Read when `COMFY_API_KEY` is unset. If both are set, `COMFY_API_KEY` wins. This is the key sent for partner nodes on the shared apps. |
 | `COMFY_API_KEY_WORK_PERSONAL` | yes for Open Product Swap and Open Unboxing | The only key those two apps use. A missing value is a `missing_key` error. It is not a fallback, and the shared key is not used in its place. |
 | `COMFY_API_KEY_TEAM` | yes for Pumpkin Carve and Reverse 3D | The only key those apps use. A missing value is a `missing_key` error. It is not a fallback, and the shared key is not used in its place. |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | for free videos on Unrender | Upstash Redis from the Vercel Marketplace (it may set `KV_REST_API_URL` and `KV_REST_API_TOKEN` instead; both work). Keeps which emails used their one free video and the rate counters. Without it, only visitors with their own Comfy API key can render. |
+| `RESEND_API_KEY` | for free videos on Unrender | Sends the 6-digit sign-in code. |
+| `RESEND_FROM` | no | Sender for the code, such as `Unrender <code@yourdomain.com>` on a domain verified in Resend. Default `Unrender <onboarding@resend.dev>`, which only delivers to the Resend account's own address. |
+| `ACCESS_SECRET` | no | Signs the code challenge and the session cookie. Falls back to `OUTPUT_SIGNING_SECRET`, then to a hash of `COMFY_API_KEY_TEAM`. |
 | `COMFY_BASE_URL_SPRITE_GENERATOR` | no | Override for that app. Default is in `workflows/deployments.json`. |
 | `COMFY_BASE_URL_VIRTUAL_TRY_ON` | no | Same. |
 | `COMFY_BASE_URL_HAND_PRODUCT_SWAP` | no | Same. Default host is `https://dep-9a807afc-d80c-43de-adc4-d0eee9a73655.run.comfy.app`. |

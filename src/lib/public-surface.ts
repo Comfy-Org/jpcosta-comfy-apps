@@ -7,7 +7,11 @@ import { isMockJobId, isMockOutputId, parsePublicRouteId } from "@/lib/ids";
  */
 export const PUBLIC_APP_IDS = ["reverse-3d"] as const;
 
-const PUBLIC_PAGE = "/reverse-3d";
+const PUBLIC_PAGE = "/unrender";
+/** The app's old page. Old links land on the new one. */
+const OLD_PAGE = "/reverse-3d";
+/** Example clips on the page, served from public/examples. */
+const EXAMPLES = /^\/examples\/[a-z0-9-]+\.(mp4|jpg|png|webp)$/;
 
 export function isPublicApp(id: string): boolean {
   return (PUBLIC_APP_IDS as readonly string[]).includes(id);
@@ -47,7 +51,11 @@ export function decidePublicRequest(method: string, pathname: string): PublicDec
   const path = normalizePath(pathname);
   const read = method === "GET" || method === "HEAD";
 
-  if (path === "/") return { action: "redirect", location: PUBLIC_PAGE };
+  if (path === "/" || path === OLD_PAGE) return { action: "redirect", location: PUBLIC_PAGE };
+
+  if (EXAMPLES.test(path)) {
+    return read ? { action: "allow" } : { action: "deny", message: "Not found." };
+  }
 
   if (path.startsWith("/_next/") || path === "/favicon.ico" || path === "/icon" || path === "/icon.svg") {
     return read ? { action: "allow" } : { action: "deny", message: "Not found." };

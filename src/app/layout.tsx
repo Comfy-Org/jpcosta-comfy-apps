@@ -2,12 +2,12 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Reverse 3D",
-  description: "Turn a final shot into a blocky playblast.",
+  title: "Unrender",
+  description: "Turn any final shot back into a grey blocking playblast.",
 };
 
 export const viewport: Viewport = {
-  themeColor: "#f6f5f2",
+  themeColor: "#ffffff",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

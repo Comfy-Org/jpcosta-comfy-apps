@@ -20,10 +20,17 @@ for (const id of listAppIds()) {
   assert.equal(isPublicApp(id), false, id);
 }
 
-assert.deepEqual(decidePublicRequest("GET", "/"), { action: "redirect", location: "/reverse-3d" });
-assert.deepEqual(decidePublicRequest("GET", "/reverse-3d/"), { action: "allow" });
-assert.equal(decidePublicRequest("HEAD", "/reverse-3d").action, "allow");
-assert.equal(decidePublicRequest("POST", "/reverse-3d").action, "deny");
+assert.deepEqual(decidePublicRequest("GET", "/"), { action: "redirect", location: "/unrender" });
+assert.deepEqual(decidePublicRequest("GET", "/reverse-3d"), { action: "redirect", location: "/unrender" });
+assert.equal(decidePublicRequest("GET", "/unrender").action, "allow");
+assert.equal(decidePublicRequest("GET", "/examples/plaza.mp4").action, "allow");
+assert.equal(decidePublicRequest("POST", "/examples/plaza.mp4").action, "deny");
+assert.equal(decidePublicRequest("GET", "/examples/../secret.mp4").action, "deny");
+assert.equal(decidePublicRequest("GET", "/presets/x.png").action, "deny");
+assert.deepEqual(decidePublicRequest("GET", "/unrender/"), { action: "allow" });
+assert.deepEqual(decidePublicRequest("GET", "/reverse-3d/"), { action: "redirect", location: "/unrender" });
+assert.equal(decidePublicRequest("HEAD", "/unrender").action, "allow");
+assert.equal(decidePublicRequest("POST", "/unrender").action, "deny");
 assert.equal(decidePublicRequest("GET", "/sprite-generator").action, "deny");
 assert.equal(decidePublicRequest("POST", "/api/run/reverse-3d").action, "allow");
 assert.equal(decidePublicRequest("GET", "/api/run/reverse-3d").action, "deny");
