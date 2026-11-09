@@ -12,6 +12,7 @@ import { saveMockJob } from "@/lib/mock";
 import { parseRunParams } from "@/lib/params";
 import { applyKlingFrame, readVideoPixelSize } from "@/lib/kling-frame";
 import { isPublicApp } from "@/lib/public-surface";
+import { dropKlingLook, klingApp } from "@/lib/reverse-3d-kling";
 import { REVERSE_3D_RENDERS_VIDEO } from "@/lib/reverse-3d-switch";
 import { durationOverCap, readContainerDurationSeconds } from "@/lib/video-duration";
 import { buildJobBody, filePathFor, redactJobBody, type UploadedAsset } from "@/lib/workflow";
@@ -126,6 +127,8 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
     if (!mock && !key) {
       throw new AppError(500, "missing_key", missingKeyMessage(appId));
     }
+    // Unrender: the Nano Banana still (drawn first, sent as `reference`) and Kling 4.0 Flash on the reverse-3d deployment.
+    const runApp = appId === "reverse-3d" ? klingApp(app) : app;
     const target = mock ? null : deploymentTarget(appId);
 
     const assets: Record<string, UploadedAsset> = {};
@@ -141,11 +144,12 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
     }
 
     const idempotencyKey = crypto.randomUUID();
-    const body = buildJobBody(app, assets, params, key);
+    const body = buildJobBody(runApp, assets, params, key);
     if (appId === "reverse-3d" && media.video) {
       const dims = readVideoPixelSize(media.video.bytes);
       if (!dims) throw new AppError(400, "invalid_input", "Could not read that video's dimensions.");
       applyKlingFrame(body.workflow, dims.width, dims.height);
+      if (!assets.reference) dropKlingLook(body.workflow);
     }
     let jobId: string;
     if (mock || !target) {

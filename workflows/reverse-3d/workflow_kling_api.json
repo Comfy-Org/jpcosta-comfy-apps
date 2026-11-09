@@ -1,0 +1,119 @@
+{
+  "10": {
+    "class_type": "LoadVideo",
+    "inputs": {
+      "file": "input.mp4"
+    },
+    "_meta": {
+      "title": "Input Final Video"
+    }
+  },
+  "11": {
+    "class_type": "Video Slice",
+    "inputs": {
+      "video": [
+        "10",
+        0
+      ],
+      "start_time": 0,
+      "duration": 10,
+      "strict_duration": false
+    },
+    "_meta": {
+      "title": "First 10 seconds"
+    }
+  },
+  "15": {
+    "class_type": "GetVideoComponents",
+    "inputs": {
+      "video": [
+        "11",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Split frames"
+    }
+  },
+  "17": {
+    "class_type": "ResizeAndPadImage",
+    "inputs": {
+      "image": [
+        "15",
+        0
+      ],
+      "target_width": 1280,
+      "target_height": 720,
+      "padding_color": "black",
+      "interpolation": "lanczos"
+    },
+    "_meta": {
+      "title": "Fit Kling frame"
+    }
+  },
+  "16": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": [
+        "17",
+        0
+      ],
+      "audio": [
+        "15",
+        1
+      ],
+      "fps": 24,
+      "codec": "h264",
+      "color_space": "sRGB",
+      "bit_depth": "auto"
+    },
+    "_meta": {
+      "title": "Pack constant 24 fps"
+    }
+  },
+  "30": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "reference.png"
+    },
+    "_meta": {
+      "title": "Playblast look (first frame, redrawn)"
+    }
+  },
+  "20": {
+    "class_type": "Kling4EditVideoNode",
+    "inputs": {
+      "model": "kling-4.0-flash",
+      "model.video_1": [
+        "16",
+        0
+      ],
+      "model.prompt": "Restyle @Video1 as a rough Blender solid-viewport blocking playblast that looks exactly like @Image1. @Image1 is the first frame of @Video1 already restyled: copy its look for every frame. Everything is untextured matte light-grey under flat studio light with soft grey shadows and a plain pale-grey sky. Every person stays a person, as a simple low-detail grey mannequin made of smooth primitive shapes: plain head with no face, no eyes, no nose, no mouth and no hair on every frame, simple torso, capsule limbs, rounded hands and feet, no clothing details. Every animal stays that animal as a simple grey shape. Every bicycle, car or object stays that same object as a simplified grey stand-in, never turned into a person. Buildings are a few large plain boxes, the ground a flat plane. No color, no textures, no text. Keep the exact camera move, framing, people, positions, motion and timing of @Video1. Do not add or remove anyone.",
+      "model.resolution": "720p",
+      "model.aspect_ratio": "adaptive",
+      "model.seed": 42,
+      "model.reference_images.image_1": [
+        "30",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Playblast (Kling 4.0 Flash Edit, look from @Image1)"
+    }
+  },
+  "21": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": [
+        "20",
+        0
+      ],
+      "filename_prefix": "reverse-3d/playblast",
+      "format": "auto",
+      "format.codec": "auto"
+    },
+    "_meta": {
+      "title": "Save Playblast"
+    }
+  }
+}

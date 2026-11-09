@@ -29,7 +29,7 @@ function scopeOutputs(app: string, job: JobView): JobView {
   };
 }
 
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;
     if (isMockJobId(id)) {
@@ -42,6 +42,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     if (!routed || !isUuid(routed.id) || !isPublicApp(routed.app) || !getDeployment(routed.app)) {
       return errorJson(404, "not_found", "Job not found.");
     }
+    // Unrender jobs live on the deployment (Kling, the visitor's key) or on Comfy Cloud (open source, free).
     const target = deploymentTarget(routed.app);
     const job = clarifyDeploymentError(target.appTitle, await fetchJob(target, routed.id));
     return Response.json(signJobView(scopeOutputs(routed.app, job)));

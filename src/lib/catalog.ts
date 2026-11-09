@@ -8,8 +8,6 @@ import {
   VIDEO_SIZE_OPTIONS,
 } from "@/lib/choices";
 import { getApp, listVisibleAppIds, type AppConfig } from "@/lib/config";
-import { PUBLIC_APP_IDS } from "@/lib/public-surface";
-import { SCENE_POLYGON_DEFAULT, SCENE_POLYGON_MAX, SCENE_POLYGON_MIN } from "@/lib/scene-mesh";
 import type { CatalogApp, ClientControl, SpriteGrid } from "@/lib/types";
 import { REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
 
@@ -152,8 +150,8 @@ const CHROME: Record<
   },
   "reverse-3d": {
     icon: "cube",
-    name: "Reverse 3D",
-    tagline: "Turn a final shot into a blocky playblast",
+    name: "Unrender",
+    tagline: "Turn any final shot back into a grey clay playblast",
     runLabel: "Make playblast",
     views: ["Playblast", "Compare"],
     kind: "reverse-3d",
@@ -329,20 +327,6 @@ function controlsFor(id: string, app: AppConfig): ClientControl[] {
       },
     ];
   }
-  if (id === "reverse-3d") {
-    return [
-      {
-        type: "slider",
-        key: "polygons",
-        label: "Polygons",
-        min: SCENE_POLYGON_MIN,
-        max: SCENE_POLYGON_MAX,
-        step: 64,
-        default: SCENE_POLYGON_DEFAULT,
-        clientOnly: true,
-      },
-    ];
-  }
   if (id === "background-removal") {
     return [
       {
@@ -395,12 +379,7 @@ function catalogFor(ids: readonly string[]): CatalogApp[] {
   });
 }
 
-/** Every enabled app. The public page does not render this list. */
+/** Every enabled app, in the studio's order. */
 export function buildCatalog(): CatalogApp[] {
   return catalogFor(listVisibleAppIds());
-}
-
-/** Apps on the public allowlist, whether or not a new app was marked enabled. */
-export function buildPublicCatalog(): CatalogApp[] {
-  return catalogFor(PUBLIC_APP_IDS);
 }

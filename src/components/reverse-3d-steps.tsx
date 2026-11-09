@@ -172,6 +172,44 @@ export function VideoSplit({
 }) {
   const leadRef = useRef<HTMLVideoElement>(null);
   const followRef = useRef<HTMLVideoElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
+  const [aspect, setAspect] = useState(16 / 9);
+  /** The playblast's shape wins; the final clip's shape holds until the playblast has loaded. */
+  const shapeFromPlayblast = useRef(false);
+  const [frame, setFrame] = useState({ left: 0, top: 0, width: 0, height: 0 });
+
+  // The frame takes the clip's own shape, as big as the box allows, so the video fills it with no bars.
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    const measure = () => {
+      const boxW = box.clientWidth;
+      const boxH = box.clientHeight;
+      let width = boxW;
+      let height = boxW / aspect;
+      if (height > boxH) {
+        height = boxH;
+        width = boxH * aspect;
+      }
+      setFrame({ left: (boxW - width) / 2, top: (boxH - height) / 2, width, height });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [aspect]);
+
+  // A video that read its metadata before React hydrated never fires onLoadedMetadata for us.
+  useEffect(() => {
+    const lead = leadRef.current;
+    const follow = followRef.current;
+    const ready = [lead, follow].find((video) => video && video.readyState >= 1 && video.videoWidth > 0);
+    if (!ready) return;
+    if (ready === lead) shapeFromPlayblast.current = true;
+    const shape = ready.videoWidth / ready.videoHeight;
+    queueMicrotask(() => setAspect(shape));
+  }, [original, playblast]);
 
   useEffect(() => {
     const lead = leadRef.current;
@@ -198,13 +236,16 @@ export function VideoSplit({
     };
   }, [original, playblast]);
 
-  function move(clientX: number, box: HTMLDivElement) {
-    const rect = box.getBoundingClientRect();
+  function move(clientX: number) {
+    const target = frameRef.current;
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
     onChange(Math.min(97, Math.max(3, ((clientX - rect.left) / rect.width) * 100)));
   }
 
   return (
     <div
+      ref={boxRef}
       className="preview r3d-split"
       role="slider"
       tabIndex={0}
@@ -214,33 +255,57 @@ export function VideoSplit({
       aria-valuenow={Math.round(position)}
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId);
-        move(event.clientX, event.currentTarget);
+        move(event.clientX);
       }}
       onPointerMove={(event) => {
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) move(event.clientX, event.currentTarget);
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) move(event.clientX);
       }}
       onKeyDown={(event) => {
         if (event.key === "ArrowLeft") onChange(Math.max(3, position - 5));
         if (event.key === "ArrowRight") onChange(Math.min(97, position + 5));
       }}
     >
-      <video ref={followRef} className="r3d-split-media" src={original} muted playsInline loop preload="auto" aria-hidden="true" />
-      <video
-        ref={leadRef}
-        className="r3d-split-media r3d-split-top"
-        src={playblast}
-        muted
-        playsInline
-        loop
-        autoPlay
-        preload="auto"
-        style={{ clipPath: `inset(0 0 0 ${position}%)` }}
-      />
-      <span className="r3d-split-handle" style={{ left: `${position}%` }} aria-hidden="true">
-        <i>⟷</i>
-      </span>
-      <span className="r3d-tag l">final</span>
-      <span className="r3d-tag r">playblast</span>
+      <div ref={frameRef} className="r3d-split-frame" style={frame}>
+        <video
+          ref={followRef}
+          className="r3d-split-media"
+          src={original}
+          muted
+          playsInline
+          loop
+          preload="auto"
+          aria-hidden="true"
+          onLoadedMetadata={(event) => {
+            const video = event.currentTarget;
+            if (!shapeFromPlayblast.current && video.videoWidth > 0 && video.videoHeight > 0) {
+              setAspect(video.videoWidth / video.videoHeight);
+            }
+          }}
+        />
+        <video
+          ref={leadRef}
+          className="r3d-split-media r3d-split-top"
+          src={playblast}
+          muted
+          playsInline
+          loop
+          autoPlay
+          preload="auto"
+          onLoadedMetadata={(event) => {
+            const video = event.currentTarget;
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+              shapeFromPlayblast.current = true;
+              setAspect(video.videoWidth / video.videoHeight);
+            }
+          }}
+          style={{ clipPath: `inset(0 0 0 ${position}%)` }}
+        />
+        <span className="r3d-split-handle" style={{ left: `${position}%` }} aria-hidden="true">
+          <i>⟷</i>
+        </span>
+        <span className="r3d-tag l">final</span>
+        <span className="r3d-tag r">playblast</span>
+      </div>
     </div>
   );
 }

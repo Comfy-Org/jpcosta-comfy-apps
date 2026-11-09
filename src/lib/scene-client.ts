@@ -5,6 +5,7 @@ import {
   closeUpCrop,
   parseSceneFind,
   parseSceneMarks,
+  selectImageOutput,
   selectTextOutput,
   SUBJECT_FRAME_CAP,
   type FrameBox,
@@ -62,7 +63,7 @@ type SubjectPayload = {
 type JobPayload = {
   status?: string;
   error?: { message?: string } | null;
-  outputs?: { id: string; name: string; sig?: string; type?: string; contentType?: string }[];
+  outputs?: { id: string; name: string; nodeId?: string; sig?: string; type?: string; contentType?: string }[];
 };
 
 /**
@@ -218,10 +219,15 @@ async function readJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function pollJob(jobId: string): Promise<JobPayload> {
+/** Jobs started with the visitor's own key live on their Comfy Cloud account: polls and downloads send the key. */
+function keyHeaders(visitorKey?: string | null): Record<string, string> {
+  return visitorKey ? { "x-comfy-key": visitorKey } : {};
+}
+
+async function pollJob(jobId: string, visitorKey?: string | null): Promise<JobPayload> {
   const started = Date.now();
   while (Date.now() - started < 3 * 60 * 1000) {
-    const response = await fetch(`/api/jobs/${jobId}`);
+    const response = await fetch(`/api/jobs/${jobId}`, { headers: keyHeaders(visitorKey) });
     const payload = await readJson<JobPayload>(response);
     if (!response.ok) throw new Error(payload.error?.message || "Could not build a 3D blockout from that clip.");
     if (payload.status === "succeeded") return payload;
@@ -348,4 +354,81 @@ export async function requestSubjectModel(
     times,
     { ...extra, rough },
   );
+}
+
+/** Longer side of the first frame Qwen Image Edit redraws, and of the frame the wait screen un-renders. */
+export const STILL_FRAME_SIDE = 1024;
+/** The "first frame": one frame in at 24 fps, close enough to the video's frame 0. */
+const STILL_FRAME_TIME = 1 / 24;
+
+export type PlayblastLook = {
+  /** The clip's first frame. */
+  frame: Blob;
+  /** The same frame redrawn as a grey blocking pass, or null when that job did not work. */
+  still: Blob | null;
+  /** Why the still did not come, when it did not. */
+  error?: string;
+  mock?: boolean;
+};
+
+/** The still job saves a PNG of about 1 MB. As a JPEG it leaves room for the clip in the run's 4.5 MB form. */
+async function asJpeg(image: Blob): Promise<Blob> {
+  const bitmap = await createImageBitmap(image);
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not read the playblast still.");
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  return jpegFrame(canvas, 0.9);
+}
+
+/** Mock mode only: a flat grey version of the frame stands in for the redrawn still. */
+function mockStill(source: HTMLCanvasElement): Blob {
+  const canvas = document.createElement("canvas");
+  canvas.width = source.width;
+  canvas.height = source.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not read that video.");
+  ctx.filter = "grayscale(1) contrast(0.55) brightness(1.25) blur(3px)";
+  ctx.drawImage(source, 0, 0);
+  return jpegFrame(canvas, 0.86);
+}
+
+/**
+ * The playblast's look, before the video job: the first frame goes to one Qwen Image Edit job that redraws it
+ * as a rough grey blocking still. The video job gives that still to Wan VACE as its look reference.
+ * Only a frame that cannot be read throws. A still that fails comes back as null with the reason.
+ */
+export async function requestPlayblastLook(
+  file: File,
+  onStatus?: (message: string) => void,
+  visitorKey?: string | null,
+): Promise<PlayblastLook> {
+  // One frame in, not 0: a seek to the time the video already sits at never fires, so nothing is decoded yet.
+  const canvas = await grabCanvas(file, STILL_FRAME_TIME, STILL_FRAME_SIDE);
+  const frame = jpegFrame(canvas, 0.9);
+  try {
+    onStatus?.("Drawing the playblast look…");
+    const form = new FormData();
+    form.set("step", "still");
+    if (visitorKey) form.set("comfyKey", visitorKey);
+    form.append("frame", frame, "frame.jpg");
+    const payload = await postSubject(form, onStatus);
+    if (payload.mock) return { frame, still: mockStill(canvas), mock: true };
+    if (!payload.jobId) return { frame, still: null, error: "The still job did not start." };
+    const job = await pollJob(payload.jobId, visitorKey);
+    // The still is the only image the job saves (node 3); its name ends in .png on a deployment.
+    const outputs = job.outputs ?? [];
+    const output = selectImageOutput(outputs) ?? outputs.find((item) => item.nodeId === "3") ?? outputs[0];
+    if (!output?.sig) return { frame, still: null, error: "The still job finished without an image." };
+    const response = await fetch(`/api/outputs/${output.id}?sig=${output.sig}`, { headers: keyHeaders(visitorKey) });
+    if (!response.ok) return { frame, still: null, error: `Could not download the still (${response.status}).` };
+    return { frame, still: await asJpeg(await response.blob()) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn("playblast still failed:", message);
+    return { frame, still: null, error: message };
+  }
 }

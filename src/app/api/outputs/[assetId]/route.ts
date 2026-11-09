@@ -56,7 +56,8 @@ export async function GET(request: Request, context: { params: Promise<{ assetId
     const routed = parsePublicRouteId(assetId);
     if (!routed || !isPublicApp(routed.app) || !getDeployment(routed.app)) throw new AppError(404, "not_found", "Output not found.");
 
-    const signed = await fetchAssetUrl(deploymentTarget(routed.app), routed.id);
+    const target = deploymentTarget(routed.app);
+    const signed = await fetchAssetUrl(target, routed.id);
     let upstream: Response;
     try {
       upstream = await fetch(signed, { redirect: "follow", signal: AbortSignal.timeout(60_000) });

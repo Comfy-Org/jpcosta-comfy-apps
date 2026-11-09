@@ -41,7 +41,7 @@
         "34-66": "balanced",
         "67-100": "strong, dramatic"
       },
-      "promptTemplate": "\u91cd\u65b0\u7167\u660e, relight the image using {intensity} {preset}, keep the product shape, materials and details unchanged",
+      "promptTemplate": "重新照明, relight the image using {intensity} {preset}, keep the product shape, materials and details unchanged",
       "output": {
         "node": "15"
       }
@@ -236,7 +236,7 @@
           "default": "2K"
         }
       },
-      "promptTemplate": "Create a realistic paparazzi-style photograph. Image 1 is the celebrity/paparazzi scene reference \u2014 keep the same location, background, camera angle, flash lighting, grain, and candid paparazzi vibe. Image 2 is the user \u2014 reproduce their face and identity EXACTLY (facial features, skin tone, hair). Insert the person from image 2 into the scene from image 1 so they appear together with the celebrity (standing beside or near them, same depth of field, matching shadows and flash highlights). Keep clothing on the user natural for the scene unless image 2 already shows appropriate attire. Photorealistic paparazzi photojournalism look: harsh on-camera flash, slight motion, nightlife/event energy. Do not change the celebrity's face. No text overlays, no watermarks, no logos.",
+      "promptTemplate": "Create a realistic paparazzi-style photograph. Image 1 is the celebrity/paparazzi scene reference — keep the same location, background, camera angle, flash lighting, grain, and candid paparazzi vibe. Image 2 is the user — reproduce their face and identity EXACTLY (facial features, skin tone, hair). Insert the person from image 2 into the scene from image 1 so they appear together with the celebrity (standing beside or near them, same depth of field, matching shadows and flash highlights). Keep clothing on the user natural for the scene unless image 2 already shows appropriate attire. Photorealistic paparazzi photojournalism look: harsh on-camera flash, slight motion, nightlife/event energy. Do not change the celebrity's face. No text overlays, no watermarks, no logos.",
       "notes": "Celebrity name is site-side search only and is not sent to the workflow. A scene file overrides search. The downloaded scene still goes to node 11 and the selfie to node 12.",
       "output": {
         "node": "30"
@@ -438,8 +438,15 @@
       "workflow": "workflows/reverse-3d/workflow_api.json",
       "cloudWorkflowId": "pending",
       "cloudWorkflowName": "comfy-api-apps - Reverse 3D",
-      "partnerNodes": true,
-      "imageInputs": {},
+      "partnerNodes": false,
+      "imageInputs": {
+        "reference": {
+          "node": "30",
+          "input": "image",
+          "maxSide": 1280,
+          "optional": true
+        }
+      },
       "videoInputs": {
         "video": {
           "node": "10",
@@ -449,12 +456,12 @@
       },
       "params": {
         "seed": {
-          "node": "20",
-          "input": "model.seed"
+          "node": "3",
+          "input": "seed"
         }
       },
       "promptTemplate": null,
-      "notes": "Kling 4.0 Edit playblast-only. Node 17 fits every frame to at least 700px on both sides before Kling (aspect kept; black pad only outside 0.40–2.50). Side-by-side compare is built in the browser (original left, playblast right). The preview posts up to 12 frames to GeminiNodeV3 on this deployment. BiRefNet (LoadBackgroundRemovalModel) runs on the background-removal deployment. That v2 host does not serve object_info, so the cut-out loads birefnet.safetensors, the file installed there, unless a combo comes back with another name. The cut-out job returns immediately and is polled on /api/reverse-3d/subject; this app does not start or stop that host. Hunyuan3D (TencentImageToModelNode node 22, Geometry, not LowPoly) then runs here on the cut-out PNG. SaveGLB node 21 saves Tencent output 1 (FILE_3D_GLB), not the legacy string on output 0. Only a committed .glb asset is reduced. A succeeded job with outputs [] is not recoverable from the job or its log. The video job does not wait for the 3D subject: it runs in parallel and has no image reference. The 3D subject is only the loading screen toy. Serverless COMFY_BASE_URL_REVERSE_3D + COMFY_API_KEY_TEAM. Any length is accepted; node 11 (Video Slice) keeps the first 10s before Kling.",
+      "notes": "Two pipelines, picked by who pays (src/lib/unrender-cloud.ts), both at most the first 10 s (node 11, Video Slice). Free (one video per email, team key): open source on Comfy Cloud. Node 12 samples the clip at 16 fps (4n+1, 161 for 10 s), node 17 sizes every frame (longer side 832, 16-pixel blocks), node 40 takes a depth pass, and Wan 2.1 VACE 14B with the lightx2v 4-step LoRA (node 49, 3) renders from that depth and the grey still. The still comes first from /api/reverse-3d/subject step=still: Qwen Image Edit 2511 (4 steps), colour taken out; the browser posts it as `reference` (node 30, desaturated in 31, sized in 32), and the page stops if it fails. About 110 GPU seconds for 10 s (roughly 32 credits). Visitor's own key (no limit, confirmed per run in the page): workflow_kling_api.json on the serverless deployment, Nano Banana 2 Lite still + Kling 4.0 Flash Edit, partner nodes billed to the key, about 500 credits for 10 s. Side-by-side compare is built in the browser. The older 3D blockout jobs (pick, mark, cutout, hunyuan) are still served by the subject route but the page no longer calls them. Serverless COMFY_BASE_URL_REVERSE_3D + COMFY_API_KEY_TEAM.",
       "output": {
         "node": "21",
         "media": "video"

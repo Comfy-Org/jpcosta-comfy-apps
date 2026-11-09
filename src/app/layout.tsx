@@ -2,12 +2,13 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Reverse 3D",
-  description: "Turn a final shot into a blocky playblast.",
+  title: "Comfy API Apps",
+  description:
+    "Sprite Generator, Virtual Try On, Hand Product Swap, Paparazzi Me, Background Removal, Open Product Swap, Open Unboxing, Pumpkin Carve, and Unrender on Comfy deployments.",
 };
 
 export const viewport: Viewport = {
-  themeColor: "#f6f5f2",
+  themeColor: "#ffffff",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

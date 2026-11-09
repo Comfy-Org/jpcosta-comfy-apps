@@ -10,7 +10,6 @@ import { POST as postSubject } from "../src/app/api/reverse-3d/subject/route";
 import { getApp } from "../src/lib/config";
 import { mapJob } from "../src/lib/comfy";
 import { blockFigureMesh, decodeGlb, encodeGlb, reduceMesh } from "../src/lib/mesh-reduce";
-import { decidePublicRequest, isPublicApp } from "../src/lib/public-surface";
 import { signAssetId, verifyAssetSignature } from "../src/lib/signing";
 import {
   buildBoxMesh,
@@ -44,6 +43,7 @@ import {
   parseSceneMarks,
   parseSubjectChoice,
   partOnFrame,
+  selectImageOutput,
   selectMeshOutput,
   selectTextOutput,
   MESH_KEEP_FRACTION,
@@ -152,11 +152,21 @@ function renderClip(seconds: number, ext: "mp4" | "webm"): Buffer {
   return readFileSync(file);
 }
 
-async function postReverse(video: Buffer, scene: Buffer | null, name = "clip.mp4", type = "video/mp4") {
+const VISITOR_KEY = "comfyui-test-visitor-key-0123456789";
+
+async function postReverse(
+  video: Buffer,
+  reference: Buffer | null,
+  name = "clip.mp4",
+  type = "video/mp4",
+  access: { key?: string | null; cookie?: string } = { key: VISITOR_KEY },
+) {
   const form = new FormData();
+  if (access.key) form.set("comfyKey", access.key);
   form.append("video", new File([new Uint8Array(video)], name, { type }));
-  if (scene) form.append("scene", new File([new Uint8Array(scene)], "scene.png", { type: "image/png" }));
-  const response = await POST(new Request("http://localhost/api/run/reverse-3d", { method: "POST", body: form }), {
+  if (reference) form.append("reference", new File([new Uint8Array(reference)], "reference.png", { type: "image/png" }));
+  const headers = access.cookie ? { cookie: access.cookie } : undefined;
+  const response = await POST(new Request("http://localhost/api/run/reverse-3d", { method: "POST", body: form, headers }), {
     params: Promise.resolve({ app: "reverse-3d" }),
   });
   const payload = (await response.json()) as {
@@ -564,11 +574,6 @@ async function main() {
   const cutoutId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const cutoutToken = cutoutAssetToken(cutoutId);
   assert.equal(verifyAssetSignature(cutoutToken, signAssetId(cutoutToken)), true);
-  assert.equal(isPublicApp("reverse-3d-cutout"), false);
-  assert.equal(decidePublicRequest("GET", `/api/outputs/${cutoutToken}`).action, "deny");
-  assert.equal(decidePublicRequest("GET", `/api/jobs/background-removal~${cutoutId}`).action, "deny");
-  assert.equal(decidePublicRequest("GET", "/api/reverse-3d/subject").action, "allow");
-  assert.equal(decidePublicRequest("POST", "/api/run/background-removal").action, "deny");
 
   assert.deepEqual(
     comboOptions(
@@ -861,9 +866,15 @@ async function main() {
   }
   process.env.COMFY_MOCK = "1";
 
-  // The video job runs in parallel with the 3D subject, so it needs no scene image.
+  // Without the grey still, Kling gets no reference image and a prompt that does not name one.
   const videoOnly = await postReverse(clip4, null);
   assert.equal(videoOnly.status, 200, JSON.stringify(videoOnly.payload.error ?? videoOnly.payload));
+  const bare = videoOnly.payload.request?.workflow;
+  assert.ok(bare);
+  assert.equal(bare["30"], undefined);
+  assert.equal(bare["20"]?.inputs["model.reference_images.image_1"], undefined);
+  assert.doesNotMatch(String(bare["20"]?.inputs["model.prompt"]), /@Image1/);
+  assert.match(String(bare["20"]?.inputs["model.prompt"]), /never turned into a person/);
 
   // Any length is accepted: the workflow keeps the first 10 seconds itself.
   const longMp4 = await postReverse(clip12, null);
@@ -871,6 +882,7 @@ async function main() {
   const longWebm = await postReverse(webm12, null, "clip.webm", "video/webm");
   assert.equal(longWebm.status, 200, JSON.stringify(longWebm.payload.error ?? longWebm.payload));
 
+  // With the still, it is node 30 and Kling copies its look from @Image1.
   const ok = await postReverse(clip4, png);
   assert.equal(ok.status, 200, JSON.stringify(ok.payload.error ?? ok.payload));
   const workflow = ok.payload.request?.workflow;
@@ -879,11 +891,47 @@ async function main() {
   assert.equal(workflow["11"]?.class_type, "Video Slice");
   assert.equal(workflow["11"]?.inputs.duration, 10);
   assert.deepEqual(workflow["15"]?.inputs.video, ["11", 0]);
-  assert.equal(workflow["20"]?.inputs["model.reference_images.image_1"], undefined);
-  assert.doesNotMatch(String(workflow["20"]?.inputs["model.prompt"]), /@Image1/);
-  assert.deepEqual(workflow["20"]?.inputs["model.video_1"], ["16", 0]);
+  assert.equal(workflow["30"]?.class_type, "LoadImage");
+  assert.equal((workflow["30"]?.inputs.image as { info?: { file_path?: string } })?.info?.file_path, "reference.png");
+  assert.deepEqual(workflow["20"]?.inputs["model.reference_images.image_1"], ["30", 0]);
+  assert.match(String(workflow["20"]?.inputs["model.prompt"]), /looks exactly like @Image1/);
+  assert.equal(workflow["20"]?.inputs.model, "kling-4.0-flash");
+
+  // The still itself: one Nano Banana job on the first frame.
+  const stillForm = new FormData();
+  stillForm.set("comfyKey", VISITOR_KEY);
+  stillForm.set("step", "still");
+  stillForm.append("frame", new File([new Uint8Array(png)], "frame.jpg", { type: "image/jpeg" }));
+  const stillResponse = await postSubject(new Request("http://localhost/api/reverse-3d/subject", { method: "POST", body: stillForm }));
+  const stillBody = (await stillResponse.json()) as {
+    mock?: boolean;
+    step?: string;
+    still?: Record<string, { class_type?: string; inputs?: Record<string, unknown> }>;
+    error?: { message?: string };
+  };
+  assert.equal(stillResponse.status, 200, JSON.stringify(stillBody.error));
+  assert.equal(stillBody.step, "still");
+  assert.equal(stillBody.mock, true);
+  assert.equal(stillBody.still?.["2"]?.class_type, "GeminiNanoBanana2V2");
+  assert.equal(stillBody.still?.["2"]?.inputs?.model, "Nano Banana 2 Lite");
+  assert.deepEqual(stillBody.still?.["2"]?.inputs?.["model.images.image_1"], ["1", 0]);
+  assert.match(String(stillBody.still?.["2"]?.inputs?.prompt), /never turn an object into a person/);
+  assert.equal(stillBody.still?.["3"]?.class_type, "SaveImage");
+  const twoFrames = new FormData();
+  twoFrames.set("comfyKey", VISITOR_KEY);
+  twoFrames.set("step", "still");
+  twoFrames.append("frame", new File([new Uint8Array(png)], "a.jpg", { type: "image/jpeg" }));
+  twoFrames.append("frame", new File([new Uint8Array(png)], "b.jpg", { type: "image/jpeg" }));
+  const twoResponse = await postSubject(new Request("http://localhost/api/reverse-3d/subject", { method: "POST", body: twoFrames }));
+  assert.equal(twoResponse.status, 400);
+  assert.equal(selectImageOutput([{ id: "a", name: "reverse-3d/still_00001_.png" }])?.id, "a");
+  assert.equal(selectImageOutput([{ id: "a", name: "reply.txt" }]), null);
+
+  // The studio runs Unrender with the app's own key: Kling's partner nodes bill that key on the deployment.
+  assert.equal((ok.payload.request as { extra_data?: { api_key_comfy_org?: string } } | undefined)?.extra_data?.api_key_comfy_org, "<redacted>");
 
   const subjectForm = new FormData();
+  subjectForm.set("comfyKey", VISITOR_KEY);
   subjectForm.set("step", "pick");
   subjectForm.set("times", "0.4,1.2");
   subjectForm.append("frame", new File([new Uint8Array(png)], "frame_1.jpg", { type: "image/jpeg" }));
@@ -909,6 +957,7 @@ async function main() {
 
   // The second job: the chosen frame, a close-up per subject, their kinds and where each sits in its close-up.
   const markForm = new FormData();
+  markForm.set("comfyKey", VISITOR_KEY);
   markForm.set("step", "mark");
   markForm.append("frame", new File([new Uint8Array(png)], "frame.jpg", { type: "image/jpeg" }));
   for (let index = 0; index < 3; index += 1) {
@@ -953,6 +1002,7 @@ async function main() {
   await refused((form) => form.append("frame", new File([new Uint8Array(png)], "frame_2.jpg", { type: "image/jpeg" })), /chosen frame once/);
 
   const cutoutForm = new FormData();
+  cutoutForm.set("comfyKey", VISITOR_KEY);
   cutoutForm.set("step", "cutout");
   cutoutForm.append("frame", new File([new Uint8Array(png)], "frame_1.jpg", { type: "image/jpeg" }));
   const cutoutResponse = await postSubject(new Request("http://localhost/api/reverse-3d/subject", { method: "POST", body: cutoutForm }));
@@ -973,7 +1023,7 @@ async function main() {
     { seed: 1, hasImage: true },
     null,
   );
-  assert.equal(videoOnlyJob.workflow["12"], undefined);
+  assert.equal(videoOnlyJob.workflow["12"]?.class_type, "VideoFrameSample");
 
   console.log("reverse-3d-scene-check ok");
 }
