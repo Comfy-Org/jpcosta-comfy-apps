@@ -7,7 +7,7 @@ import { kvConfigured, kvCount, kvDelete, kvGet, kvSetIfAbsent } from "@/lib/kv"
  * Who may start a paid job on Unrender, and which pipeline it gets (src/lib/unrender-cloud.ts).
  * - A visitor's own Comfy API key: Nano Banana still + Kling on the serverless deployment, the partner nodes
  *   billed to that key. No limit on how many; the page asks the visitor to confirm the spend before each run.
- * - An email signed in with a code: one free video per email, open source (Qwen still + Wan VACE) on
+ * - An email signed in (with a code, or with Google): one free video per email, open source (Qwen still + Wan VACE) on
  *   Comfy Cloud, paid by the app's key.
  * Both up to 10 seconds.
  * The code and the session are signed tokens; the store only keeps which emails used their video and the counters.
@@ -180,7 +180,7 @@ export function requireAccess(request: Request, form: FormData): Access {
   if (key) return { kind: "key", key };
   const email = sessionEmail(request);
   if (email) return { kind: "email", email };
-  throw new AppError(401, "sign_in", "Sign in with your email for one free video, or paste your own Comfy API key.");
+  throw new AppError(401, "sign_in", "Sign in for one free video, or paste your own Comfy API key.");
 }
 
 /** Marks the email's one free video as taken. False when it was already taken. */
@@ -201,4 +201,113 @@ export async function allowStill(email: string): Promise<void> {
   if ((await kvCount(`unrender:still:${email}`, 24 * 60 * 60)) > STILLS_PER_EMAIL) {
     throw new AppError(429, "rate_limited", "Too many tries with this email today. Use your own Comfy API key, or try tomorrow.");
   }
+}
+
+/*
+ * Sign in with Google: the same session cookie as the email code, without sending any email.
+ * The browser opens /api/access/google in a popup; Google sends it back to /api/access/google/callback,
+ * which sets the cookie and tells the page over a BroadcastChannel. Needs GOOGLE_CLIENT_ID and
+ * GOOGLE_CLIENT_SECRET (an OAuth "Web application" client whose redirect URI is <origin>/api/access/google/callback).
+ */
+
+export const OAUTH_COOKIE = "unrender_oauth";
+const OAUTH_SECONDS = 10 * 60;
+export const GOOGLE_CALLBACK_PATH = "/api/access/google/callback";
+
+function googleClient(): { id: string; secret: string } | null {
+  const id = process.env.GOOGLE_CLIENT_ID?.trim();
+  const secret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+  return id && secret ? { id, secret } : null;
+}
+
+export function googleLoginReady(): boolean {
+  return kvConfigured() && (Boolean(googleClient()) || isMockMode());
+}
+
+function readCookie(request: Request, name: string): string | null {
+  const cookie = request.headers.get("cookie") ?? "";
+  const match = cookie.split(/;\s*/).find((part) => part.startsWith(`${name}=`));
+  return match ? match.slice(name.length + 1) : null;
+}
+
+/** Where to send the popup: Google's consent page, or (mock mode without a client) straight to the callback. */
+export function startGoogleLogin(origin: string): { location: string; cookie: string } {
+  const nonce = randomBytes(12).toString("base64url");
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  const cookie = `${OAUTH_COOKIE}=${sign({ k: "oauth", n: nonce, x: Date.now() + OAUTH_SECONDS * 1000 })}; Path=/api/access/google; HttpOnly; SameSite=Lax; Max-Age=${OAUTH_SECONDS}${secure}`;
+  const client = googleClient();
+  if (!client) {
+    if (!isMockMode()) throw new AppError(503, "access_off", "Google sign-in is not set up yet. Use your own Comfy API key for now.");
+    return { location: `${origin}${GOOGLE_CALLBACK_PATH}?state=${nonce}&code=mock`, cookie };
+  }
+  const params = new URLSearchParams({
+    client_id: client.id,
+    redirect_uri: `${origin}${GOOGLE_CALLBACK_PATH}`,
+    response_type: "code",
+    scope: "openid email",
+    state: nonce,
+    prompt: "select_account",
+  });
+  return { location: `https://accounts.google.com/o/oauth2/v2/auth?${params}`, cookie };
+}
+
+/** Trades Google's code for the account's verified email. Returns the session token for the cookie. */
+export async function finishGoogleLogin(request: Request, origin: string): Promise<{ token: string; email: string }> {
+  const url = new URL(request.url);
+  const saved = verify<{ k?: string; n?: string }>(readCookie(request, OAUTH_COOKIE));
+  const state = url.searchParams.get("state") ?? "";
+  if (!saved || saved.k !== "oauth" || !saved.n || saved.n !== state) {
+    throw new AppError(400, "code_expired", "That sign-in expired. Try again.");
+  }
+  if (url.searchParams.get("error")) throw new AppError(400, "sign_in", "Google sign-in was cancelled.");
+  const code = url.searchParams.get("code") ?? "";
+  if (!code) throw new AppError(400, "sign_in", "Google did not send a sign-in code. Try again.");
+
+  let email: string;
+  const client = googleClient();
+  if (!client) {
+    if (!isMockMode()) throw new AppError(503, "access_off", "Google sign-in is not set up yet.");
+    email = "you@gmail.test";
+  } else {
+    const response = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: client.id,
+        client_secret: client.secret,
+        redirect_uri: `${origin}${GOOGLE_CALLBACK_PATH}`,
+        grant_type: "authorization_code",
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const payload = (await response.json().catch(() => null)) as { id_token?: string; error?: string } | null;
+    if (!response.ok || !payload?.id_token) {
+      console.warn(`google token ${response.status}: ${payload?.error ?? ""}`);
+      throw new AppError(502, "upstream_error", "Google sign-in failed. Try again.");
+    }
+    // The ID token came straight from Google over TLS in exchange for our client secret, so its claims can be read
+    // without checking the signature (OpenID Connect Core 3.1.3.7). The audience and issuer are still checked.
+    const claims = JSON.parse(Buffer.from(payload.id_token.split(".")[1] ?? "", "base64url").toString("utf8")) as {
+      aud?: string;
+      iss?: string;
+      exp?: number;
+      email?: string;
+      email_verified?: boolean;
+    };
+    const issuerOk = claims.iss === "https://accounts.google.com" || claims.iss === "accounts.google.com";
+    if (claims.aud !== client.id || !issuerOk || !claims.exp || claims.exp * 1000 < Date.now()) {
+      throw new AppError(502, "upstream_error", "Google sign-in failed. Try again.");
+    }
+    if (!claims.email || claims.email_verified !== true) {
+      throw new AppError(403, "sign_in", "That Google account has no verified email.");
+    }
+    email = normalizeEmail(claims.email);
+  }
+  const token = sign({ k: "session", e: email, x: Date.now() + SESSION_SECONDS * 1000 });
+  return { token, email };
+}
+
+export function clearOauthCookie(): string {
+  return `${OAUTH_COOKIE}=; Path=/api/access/google; HttpOnly; SameSite=Lax; Max-Age=0`;
 }

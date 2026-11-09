@@ -27,6 +27,10 @@ assert.equal(decidePublicRequest("GET", "/examples/avengers.mp4").action, "allow
 assert.equal(decidePublicRequest("POST", "/examples/avengers.mp4").action, "deny");
 assert.equal(decidePublicRequest("GET", "/examples/../secret.mp4").action, "deny");
 assert.equal(decidePublicRequest("GET", "/brand/favicon.gif").action, "allow");
+assert.equal(decidePublicRequest("GET", "/api/access/google").action, "allow");
+assert.equal(decidePublicRequest("GET", "/api/access/google/callback").action, "allow");
+assert.equal(decidePublicRequest("POST", "/api/access/google").action, "deny");
+assert.equal(decidePublicRequest("GET", "/api/access/google/other").action, "deny");
 assert.equal(decidePublicRequest("GET", "/brand/favicon-sprite.png").action, "allow");
 assert.equal(decidePublicRequest("POST", "/brand/favicon.gif").action, "deny");
 assert.equal(decidePublicRequest("GET", "/brand/../secret.png").action, "deny");

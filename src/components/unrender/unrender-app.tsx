@@ -20,7 +20,7 @@ import { useSpinningFavicon } from "@/components/unrender/spinning-favicon";
 
 type Stage = "idle" | "gate" | "confirm" | "reading" | "look" | "render" | "finishing" | "result" | "error";
 
-type AccessInfo = { email: string | null; used: boolean; emailLogin: boolean; mock: boolean };
+type AccessInfo = { email: string | null; used: boolean; emailLogin: boolean; googleLogin?: boolean; mock: boolean };
 
 /** `seconds`: the length the browser measured, at most 10; the server samples that much at 16 fps. */
 type Clip = { file: File; url: string; trimmed: boolean; seconds?: number };
@@ -897,6 +897,18 @@ export function UnrenderApp() {
   );
 }
 
+/** Google's "G", for the sign-in button. */
+function GoogleMark() {
+  return (
+    <svg className="ur-google-g" viewBox="0 0 48 48" aria-hidden="true">
+      <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+      <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+      <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+      <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+    </svg>
+  );
+}
+
 function Gate({
   access,
   visitorKey,
@@ -923,6 +935,66 @@ function Gate({
   const [keyDraft, setKeyDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+
+  // Google sign-in runs in a popup; its last page reports back here (BroadcastChannel, or postMessage as a fallback).
+  const signedInRef = useRef(onSignedIn);
+  useEffect(() => {
+    signedInRef.current = onSignedIn;
+  }, [onSignedIn]);
+  useEffect(() => {
+    const onResult = (data: unknown) => {
+      const result = data as { ok?: boolean; error?: string } | null;
+      if (!result || typeof result.ok !== "boolean") return;
+      setBusy(false);
+      if (!result.ok) {
+        setMessage(result.error ?? "Google sign-in failed. Try again.");
+        return;
+      }
+      void fetch("/api/access", { cache: "no-store" })
+        .then((response) => readJson<AccessInfo>(response))
+        .then((info) => {
+          if (info?.email) signedInRef.current({ email: info.email, used: Boolean(info.used) });
+          else setMessage("Google sign-in did not stick. Try again.");
+        })
+        .catch(() => setMessage("Google sign-in did not stick. Try again."));
+    };
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel("unrender-access");
+      channel.onmessage = (event) => onResult(event.data);
+    } catch {
+      channel = null;
+    }
+    const onWindowMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data as { unrenderAccess?: unknown } | null;
+      if (data && "unrenderAccess" in data) onResult(data.unrenderAccess);
+    };
+    window.addEventListener("message", onWindowMessage);
+    return () => {
+      channel?.close();
+      window.removeEventListener("message", onWindowMessage);
+    };
+  }, []);
+
+  function signInWithGoogle() {
+    setMessage(null);
+    const width = 480;
+    const height = 640;
+    const left = Math.max(0, window.screenX + (window.outerWidth - width) / 2);
+    const top = Math.max(0, window.screenY + (window.outerHeight - height) / 2);
+    const popup = window.open("/api/access/google", "unrender-google", `width=${width},height=${height},left=${left},top=${top}`);
+    if (!popup) {
+      setMessage("Your browser blocked the Google window. Allow pop-ups for this page and try again.");
+      return;
+    }
+    setBusy(true);
+    const watch = window.setInterval(() => {
+      if (!popup.closed) return;
+      window.clearInterval(watch);
+      setBusy(false);
+    }, 500);
+  }
 
   async function sendCode(event: FormEvent) {
     event.preventDefault();
@@ -977,7 +1049,9 @@ function Gate({
   }
 
   const signedIn = access?.email ?? null;
-  const freeOn = access?.emailLogin ?? false;
+  const emailOn = access?.emailLogin ?? false;
+  const googleOn = access?.googleLogin ?? false;
+  const freeOn = emailOn || googleOn;
 
   return (
     <div className="ur-gate">
@@ -990,7 +1064,7 @@ function Gate({
       {note ? <p className="ur-gate-note">{note}</p> : null}
 
       <div className="ur-gate-part">
-        <span className="ur-gate-label">One free video per email</span>
+        <span className="ur-gate-label">{googleOn ? "One free video per Google account" : "One free video per email"}</span>
         {signedIn ? (
           <p className="ur-gate-line">
             Signed in as <b>{signedIn}</b>
@@ -1001,11 +1075,18 @@ function Gate({
               </button>
             ) : null}{" "}
             <button type="button" className="ur-link" onClick={onSignOut}>
-              Use another email
+              {googleOn ? "Use another account" : "Use another email"}
             </button>
           </p>
         ) : !freeOn ? (
           <p className="ur-gate-line">Free videos are not switched on yet. Use your own key for now.</p>
+        ) : googleOn ? (
+          <div className="ur-gate-form">
+            <button type="button" className="ur-go ur-google" disabled={busy} onClick={signInWithGoogle}>
+              <GoogleMark />
+              Continue with Google
+            </button>
+          </div>
         ) : challenge ? (
           <form className="ur-gate-form" onSubmit={verify}>
             <input

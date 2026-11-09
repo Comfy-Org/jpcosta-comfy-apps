@@ -243,6 +243,8 @@ body:has(.ur) { background: #fff; }
 .ur-gate-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .ur-gate-form .ur-go,
 .ur-gate-form .ur-ghost { height: 42px; padding: 0 16px; font-size: 14px; }
+.ur-gate-form .ur-google { padding-left: 9px; gap: 10px; }
+.ur-google-g { box-sizing: border-box; width: 26px; height: 26px; padding: 5px; border-radius: 50%; background: #fff; flex: none; }
 .ur-input {
   flex: 1 1 180px;
   min-width: 0;

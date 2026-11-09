@@ -80,6 +80,10 @@ export function decidePublicRequest(method: string, pathname: string): PublicDec
     return { action: "deny", message: "Not found." };
   }
 
+  if (path === "/api/access/google" || path === "/api/access/google/callback") {
+    return read ? { action: "allow" } : { action: "deny", message: "Not found." };
+  }
+
   if (path === "/api/access/code" || path === "/api/access/verify") {
     return method === "POST" ? { action: "allow" } : { action: "deny", message: "Not found." };
   }

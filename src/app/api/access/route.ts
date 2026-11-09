@@ -1,4 +1,4 @@
-import { clearSessionCookie, emailLoginReady, freeVideoUsed, sessionEmail } from "@/lib/access";
+import { clearSessionCookie, emailLoginReady, freeVideoUsed, googleLoginReady, sessionEmail } from "@/lib/access";
 import { isMockMode } from "@/lib/env";
 import { errorResponse } from "@/lib/http";
 
@@ -10,10 +10,12 @@ export async function GET(request: Request) {
   try {
     const email = sessionEmail(request);
     const ready = emailLoginReady();
+    const google = googleLoginReady();
     return Response.json({
       email,
-      used: email && ready ? await freeVideoUsed(email) : false,
+      used: email && (ready || google) ? await freeVideoUsed(email) : false,
       emailLogin: ready,
+      googleLogin: google,
       mock: isMockMode(),
     });
   } catch (error) {
