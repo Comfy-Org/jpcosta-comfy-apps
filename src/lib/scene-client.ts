@@ -5,6 +5,7 @@ import {
   closeUpCrop,
   parseSceneFind,
   parseSceneMarks,
+  selectImageOutput,
   selectTextOutput,
   SUBJECT_FRAME_CAP,
   type FrameBox,
@@ -348,4 +349,70 @@ export async function requestSubjectModel(
     times,
     { ...extra, rough },
   );
+}
+
+/** Longer side of the first frame Nano Banana redraws, and of the frame the wait screen un-renders. */
+export const STILL_FRAME_SIDE = 1024;
+/** The "first frame": one frame in at 24 fps, close enough to Kling's frame 0. */
+const STILL_FRAME_TIME = 1 / 24;
+
+export type PlayblastLook = {
+  /** The clip's first frame, as Kling sees it. */
+  frame: Blob;
+  /** The same frame redrawn as a grey blocking pass, or null when that job did not work. */
+  still: Blob | null;
+  mock?: boolean;
+};
+
+/** Nano Banana saves a PNG of about 1 MB. As a JPEG it leaves room for the clip in the run's 4.5 MB form. */
+async function asJpeg(image: Blob): Promise<Blob> {
+  const bitmap = await createImageBitmap(image);
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not read the playblast still.");
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  return jpegFrame(canvas, 0.9);
+}
+
+/** Mock mode only: a flat grey version of the frame stands in for Nano Banana's still. */
+function mockStill(source: HTMLCanvasElement): Blob {
+  const canvas = document.createElement("canvas");
+  canvas.width = source.width;
+  canvas.height = source.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not read that video.");
+  ctx.filter = "grayscale(1) contrast(0.55) brightness(1.25) blur(3px)";
+  ctx.drawImage(source, 0, 0);
+  return jpegFrame(canvas, 0.86);
+}
+
+/**
+ * The playblast's look, before the video job: the first frame goes to one Nano Banana job that redraws it
+ * as a rough grey blocking still. The video job sends that still to Kling as `@Image1`.
+ * Only a frame that cannot be read throws. A still that fails comes back as null, and the video runs without it.
+ */
+export async function requestPlayblastLook(file: File, onStatus?: (message: string) => void): Promise<PlayblastLook> {
+  // One frame in, not 0: a seek to the time the video already sits at never fires, so nothing is decoded yet.
+  const canvas = await grabCanvas(file, STILL_FRAME_TIME, STILL_FRAME_SIDE);
+  const frame = jpegFrame(canvas, 0.9);
+  try {
+    onStatus?.("Drawing the playblast look…");
+    const form = new FormData();
+    form.set("step", "still");
+    form.append("frame", frame, "frame.jpg");
+    const payload = await postSubject(form, onStatus);
+    if (payload.mock) return { frame, still: mockStill(canvas), mock: true };
+    if (!payload.jobId) return { frame, still: null };
+    const job = await pollJob(payload.jobId);
+    const output = selectImageOutput(job.outputs ?? []);
+    if (!output?.sig) return { frame, still: null };
+    const response = await fetch(`/api/outputs/${output.id}?sig=${output.sig}`);
+    if (!response.ok) return { frame, still: null };
+    return { frame, still: await asJpeg(await response.blob()) };
+  } catch {
+    return { frame, still: null };
+  }
 }

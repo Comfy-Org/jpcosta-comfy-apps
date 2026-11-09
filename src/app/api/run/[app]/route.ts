@@ -12,6 +12,7 @@ import { saveMockJob } from "@/lib/mock";
 import { parseRunParams } from "@/lib/params";
 import { applyKlingFrame, readVideoPixelSize } from "@/lib/kling-frame";
 import { isPublicApp } from "@/lib/public-surface";
+import { dropLookReference } from "@/lib/reverse-3d-look";
 import { REVERSE_3D_RENDERS_VIDEO } from "@/lib/reverse-3d-switch";
 import { durationOverCap, readContainerDurationSeconds } from "@/lib/video-duration";
 import { buildJobBody, filePathFor, redactJobBody, type UploadedAsset } from "@/lib/workflow";
@@ -146,6 +147,7 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
       const dims = readVideoPixelSize(media.video.bytes);
       if (!dims) throw new AppError(400, "invalid_input", "Could not read that video's dimensions.");
       applyKlingFrame(body.workflow, dims.width, dims.height);
+      if (!assets.reference) dropLookReference(body.workflow);
     }
     let jobId: string;
     if (mock || !target) {

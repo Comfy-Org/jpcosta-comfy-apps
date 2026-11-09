@@ -6,14 +6,12 @@ import { downloadBlob, exportCutout } from "@/lib/composite";
 import { FORM_BUDGET_BYTES, VIDEO_FORM_BUDGET_BYTES, imageRejectReason, packImages, randomSeed, shrinkForUpload, videoRejectReason, videoTypeRejectReason } from "@/lib/prepare-image";
 import { clientFailureMessage, fetchBlobRetrying, type ClientStep } from "@/lib/client-fetch";
 import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
-import { requestSubjectModel, sampleSceneFrames, type SceneModel } from "@/lib/scene-client";
+import { requestPlayblastLook } from "@/lib/scene-client";
 import { REVERSE_3D_RENDERS_VIDEO } from "@/lib/reverse-3d-switch";
-import { SCENE_POLYGON_DEFAULT } from "@/lib/scene-mesh";
-import { BlockBuild } from "@/components/block-build";
 import { LILAC, TERMINAL_STATUSES, type CatalogApp, type CatalogImage, type JobView, type RunResponse, type TextControl } from "@/lib/types";
 import { AppIcon } from "@/components/app-icon";
-import { SceneOrbit, type SceneOrbitHandle } from "@/components/scene-orbit";
 import { DownloadMenu, DropZone, PickButton, StepNav, VideoSplit, type Step } from "@/components/reverse-3d-steps";
+import { TileUnrender } from "@/components/tile-unrender";
 
 type SceneCandidate = {
   token: string;
@@ -65,10 +63,10 @@ type Recovery = {
 };
 
 /**
- * Longest the video job waits for the 3D toy's jobs to be queued ahead of it.
- * The toy runs two short jobs, the second one after the first has finished, so this covers both.
+ * About how long the Kling video job takes, for the wait screen's tiles while Kling reports no progress.
+ * The bar eases toward the end over this time and never claims to be done before the job is.
  */
-const TOY_HEAD_START_MS = 45_000;
+const PLAYBLAST_TYPICAL_SECONDS = 150;
 
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
@@ -110,25 +108,18 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
   const [findingScene, setFindingScene] = useState(false);
   const [waited, setWaited] = useState(0);
   const [recovery, setRecovery] = useState<Recovery | null>(null);
-  const [scene, setScene] = useState<SceneModel | null>(null);
-  const [sceneState, setSceneState] = useState<"idle" | "building" | "ready" | "error">("idle");
-  /** How far the 3D toy's build is, 0 to 1, while the video is switched off and the toy is all there is. */
-  const [sceneProgress, setSceneProgress] = useState(0);
-  const [polygonCount, setPolygonCount] = useState(0);
   /** Steps layout: a step the person went back to, over the one the state implies. */
   const [pick, setPick] = useState<Step | null>(null);
   /** Steps layout: the result the build animation has finished for, so the result step can open. */
   const [shownId, setShownId] = useState<string | null>(null);
   /** Steps layout: start the job on its own once the clip is ready. */
   const autoRun = useRef(false);
-  /**
-   * Steps layout: the 3D toy's job is on the deployment, or gave up. The video job waits for this,
-   * so the few-second toy job is not stuck behind the minutes-long render on the same deployment.
-   */
-  const [toyQueued, setToyQueued] = useState(false);
+  /** Steps layout: the clip's first frame and its grey playblast still, drawn before the video job. */
+  const [look, setLook] = useState<{ frame: string; still: string | null; blob: Blob | null } | null>(null);
+  /** Steps layout: the still's job is over, with or without a still, so the video job can start. */
+  const [lookDone, setLookDone] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const sceneToken = useRef(0);
-  const sceneOrbitRef = useRef<SceneOrbitHandle | null>(null);
   const stepRef = useRef<ClientStep>("submit");
   const previewRef = useRef<HTMLDivElement | null>(null);
   const [previewWidth, setPreviewWidth] = useState(640);
@@ -253,62 +244,56 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
             return;
           }
           const token = ++sceneToken.current;
-          setScene(null);
-          setPolygonCount(0);
-          setSceneState("building");
-          setSceneProgress(0.04);
-          setToyQueued(false);
+          setLook((current) => {
+            if (current) {
+              URL.revokeObjectURL(current.frame);
+              if (current.still) URL.revokeObjectURL(current.still);
+            }
+            return null;
+          });
+          setLookDone(false);
           setNeed("Checking the clip…");
+          let prepared: Awaited<ReturnType<typeof prepareReverse3dUpload>> | null = null;
           try {
-            const prepared = await prepareReverse3dUpload(file);
+            prepared = await prepareReverse3dUpload(file);
             if (token !== sceneToken.current) return;
+            const ready = prepared;
             setUploads((current) => {
               revokeUpload(current[role]);
               return {
                 ...current,
                 [role]: {
-                  file: prepared.file,
+                  file: ready.file,
                   source: file,
-                  url: URL.createObjectURL(prepared.file),
+                  url: URL.createObjectURL(ready.file),
                   sourceUrl: URL.createObjectURL(file),
                   name: file.name,
-                  width: prepared.width,
-                  height: prepared.height,
+                  width: ready.width,
+                  height: ready.height,
                 },
               };
             });
-            setNeed("Finding everyone in the shot…");
-            const sampled = await sampleSceneFrames(prepared.file, prepared.duration);
+            setNeed("Drawing the playblast look…");
+            const drawn = await requestPlayblastLook(ready.file, (message) => {
+              if (token === sceneToken.current) setNeed(message);
+            });
             if (token !== sceneToken.current) return;
-            const picked = await requestSubjectModel(
-              prepared.file,
-              sampled.frames,
-              sampled.times,
-              sampled.aspect,
-              (message, share) => {
-                if (token !== sceneToken.current) return;
-                setNeed(message);
-                setSceneProgress(share);
-              },
-              () => {
-                if (token === sceneToken.current) setToyQueued(true);
-              },
-            );
-            if (token !== sceneToken.current) return;
-            setScene(picked);
-            setSceneProgress(1);
-            setSceneState("ready");
+            setLook({
+              frame: URL.createObjectURL(drawn.frame),
+              still: drawn.still ? URL.createObjectURL(drawn.still) : null,
+              blob: drawn.still,
+            });
+            setLookDone(true);
             setNeed(
-              prepared.trimmed
+              ready.trimmed
                 ? `Using the first ${REVERSE_3D_MAX_SECONDS} seconds of this clip.`
                 : null,
             );
           } catch (err) {
             if (token !== sceneToken.current) return;
-            setScene(null);
-            setSceneState("error");
-            setToyQueued(true);
-            setNeed(err instanceof Error ? err.message : "Could not read that video.");
+            // A clip that was read still renders, just without the wait screen's frame.
+            setLookDone(Boolean(prepared));
+            setNeed(prepared ? null : err instanceof Error ? err.message : "Could not read that video.");
           }
           return;
         }
@@ -445,7 +430,7 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
     }
     if (app.kind === "carve") return "9:16 timelapse";
     if (app.kind === "reverse-3d") {
-      return polygonCount > 0 ? `Blocky playblast · ${polygonCount} polygons` : "Blocky playblast";
+      return "Blocking playblast";
     }
     if (app.kind === "paparazzi") {
       const name = controlValue(next, "celebrity").trim();
@@ -667,6 +652,7 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
         form.append("frames", Object.keys(app.grids)[0] ?? "8");
       }
       if (nextSeed !== null) form.append("seed", String(nextSeed));
+      if (app.kind === "reverse-3d" && look?.blob) form.append("reference", look.blob, "reference.jpg");
       if (app.kind === "paparazzi" && !uploads.scene && selectedToken) form.append("sceneToken", selectedToken);
 
       const response = await fetch(app.endpoint, { method: "POST", body: form, signal: controller.signal });
@@ -747,41 +733,15 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
   const showVideoCompare = view === 1 && app.kind === "reverse-3d" && active;
   const showSprite = view === 1 && app.kind === "sprite" && active;
   const grid = app.grids?.[active?.frames || Object.keys(app.grids ?? {})[0] || "8"] ?? { cols: 4, rows: 2 };
-  const polygonValue = Number(controlValue(values, "polygons")) || SCENE_POLYGON_DEFAULT;
-  const showScenePreview = app.kind === "reverse-3d" && scene && !active;
-  const sceneCaption = scene
-    ? `${scene.mock ? "Mock preview, not a Hunyuan model. " : ""}Drag to orbit · ${scene.time.toFixed(1)}s · ${polygonCount > 0 ? `${polygonCount} polygons` : "mesh"}`
-    : "Picking the subject…";
-  const sceneView =
-    app.kind === "reverse-3d" && scene ? (
-      <SceneOrbit
-        ref={sceneOrbitRef}
-        positions={scene.positions}
-        indices={scene.indices}
-        polygons={polygonValue}
-        onPolygonCount={setPolygonCount}
-      />
-    ) : null;
-
-  const parts = scene?.parts ?? null;
-
-  // Steps layout: the video job starts once the clip is prepared and the toy's job is queued ahead of it.
-  // The toy is only the loading screen, so the video never waits for it to finish, and waits at most a few seconds to queue.
+  // Steps layout: the video job starts once the clip is prepared and its playblast still is drawn (or failed).
   useEffect(() => {
-    if (layout !== "steps" || !uploads.video || toyQueued) return;
-    const timer = window.setTimeout(() => setToyQueued(true), TOY_HEAD_START_MS);
-    return () => window.clearTimeout(timer);
-  }, [layout, uploads.video, toyQueued]);
-
-  useEffect(() => {
-    // While the video is switched off, the clip only builds the 3D blockout.
     if (!REVERSE_3D_RENDERS_VIDEO && app.kind === "reverse-3d") return;
-    if (layout !== "steps" || !autoRun.current || !uploads.video || !toyQueued || busy) return;
+    if (layout !== "steps" || !autoRun.current || !uploads.video || !lookDone || busy) return;
     autoRun.current = false;
     void run();
-    // run reads the latest uploads from this render; it should fire once when the clip and the toy job are ready.
+    // run reads the latest uploads and still from this render; it should fire once when both are ready.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layout, uploads.video, toyQueued]);
+  }, [layout, uploads.video, lookDone]);
 
   const selectedScene = selectedToken ? `/api/paparazzi/scene?token=${encodeURIComponent(selectedToken)}` : "";
   const status = findingScene
@@ -809,17 +769,13 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
 
   if (layout === "steps" && app.kind === "reverse-3d") {
     const video = uploads.video;
-    const building = sceneState === "building";
-    // Without a 3D toy there is nothing to finish, so the result opens as soon as the video is ready.
-    const loaderDone = Boolean(active && (shownId === active.id || !parts));
-    const reached: Step = active ? 3 : video || building ? 2 : 1;
-    const implied: Step = active ? (loaderDone ? 3 : 2) : video || building ? 2 : 1;
+    // The clip is read and its still is being drawn: the wait screen already shows.
+    const drawing = Boolean(video) && !lookDone;
+    const reached: Step = active ? 3 : video ? 2 : 1;
+    const implied: Step = active ? (shownId === active.id ? 3 : 2) : video ? 2 : 1;
     const step: Step = busy ? 2 : (pick ?? implied);
-    const replay = step === 2 && Boolean(active) && shownId === active?.id && !busy;
     const failed = phase === "error" && Boolean(error);
-    // While the video is switched off, the 3D blockout is the whole result, so its failure is the run's failure.
     const videoOff = !REVERSE_3D_RENDERS_VIDEO;
-    const unreadable = sceneState === "error" && (!video || videoOff);
     const takeVideo = (file: File) => {
       setPick(null);
       setActiveId(null);
@@ -837,52 +793,32 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
       downloadBlob(active.compareBlob, filename);
       setToast(filename);
     };
-    const blockoutHeadline = unreadable
-      ? video
-        ? "Could not build the 3D blockout"
-        : "Could not read that shot"
-      : !video
-        ? "Checking the clip…"
-        : parts && !building
-          ? "3D blockout ready"
-          : "Building the 3D blockout…";
-    const blockoutLine =
-      unreadable || building || !parts
-        ? need
-        : scene?.rough
-          ? `Found ${scene.found ?? "everyone"}, but could not mark their poses this time, so each one is a single block.`
-          : `Built ${scene?.found ?? "the shot"}. Drag to spin it, click a block.`;
-    const headline = videoOff
-      ? blockoutHeadline
-      : replay
-      ? "Built again, just for fun"
-      : failed
-        ? "The render did not work"
-        : unreadable
-          ? "Could not read that shot"
-          : !video
-            ? "Checking the clip…"
-            : phase === "running"
-              ? `Rendering · ${Math.round(progress * 100)}%`
-              : active
-                ? "Done!"
-                : "Rendering · queued";
-    const toyLine = videoOff
-      ? blockoutLine
-      : failed
+    // Kling rarely reports progress, so the tiles also follow the time the job has taken.
+    const estimate = 1 - Math.exp(-waited / (PLAYBLAST_TYPICAL_SECONDS / 2.5));
+    const renderShare = active ? 1 : busy ? Math.max(progress, estimate) : 0;
+    const tiles = drawing || !video ? 0.04 : 0.1 + 0.9 * renderShare;
+    const headline = failed
+      ? "The render did not work"
+      : videoOff
+        ? "The video is switched off"
+        : !video
+          ? "Checking the clip…"
+          : drawing
+            ? "Drawing the playblast look…"
+            : active
+              ? "Done!"
+              : phase === "running"
+                ? `Un-rendering · ${Math.round(renderShare * 100)}%`
+                : "Un-rendering · queued";
+    const waitLine = failed
       ? error
-      : unreadable
+      : drawing || !video
         ? need
-        : replay
+        : active
           ? null
-          : parts
-            ? "Drag to spin your 3D blockout, click a block."
-            : building
-              ? "Building a 3D blockout to play with…"
-              : sceneState === "error"
-                ? "No 3D blockout this time, the video is still rendering."
-                : null;
-    const loaderBar = videoOff ? sceneProgress : active ? 1 : bar;
+          : look && !look.still
+            ? "No still this time, so the playblast is drawn from words alone."
+            : "A few minutes. The tiles follow the render.";
     return (
       <article className="card r3d" data-step={step}>
         <StepNav
@@ -902,7 +838,7 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
               onHot={(on) => setHot(on ? "video" : null)}
               onFile={takeVideo}
             />
-            <div className="need" role="status">{unreadable || failed ? null : need}</div>
+            <div className="need" role="status">{failed ? null : need}</div>
             {video ? (
               <button type="button" className="btn r3d-keep" onClick={() => setPick(null)}>
                 Back to {video.name} <span className="arrow" aria-hidden="true">→</span>
@@ -912,39 +848,32 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
         ) : null}
         {step === 2 ? (
           <div className="r3d-two">
-            <div className="preview r3d-build" data-hud={parts ? "persp · drag to orbit · click a block" : "persp"}>
-              <BlockBuild
-                parts={parts}
-                plate={scene?.plate ?? null}
+            <div className="preview r3d-build r3d-unrender">
+              <TileUnrender
+                frame={look?.frame ?? null}
+                still={look?.still ?? null}
+                progress={tiles}
                 done={Boolean(active) && !busy}
                 onFinished={() => {
                   if (active) setShownId(active.id);
                   setPick(null);
                 }}
               />
-              <div className={`r3d-status${failed || unreadable ? " bad" : ""}`} aria-live="polite">
+              <div className={`r3d-status${failed ? " bad" : ""}`} aria-live="polite">
                 <b>{headline}</b>
-                {toyLine ? <p>{toyLine}</p> : null}
-                {failed || unreadable ? (
+                {waitLine ? <p>{waitLine}</p> : null}
+                {failed ? (
                   <div className="r3d-status-actions">
-                    {failed ? (
-                      <button type="button" className="btn dark" onClick={() => void (recovery ? resume() : run())}>
-                        {recovery?.kind === "download" ? "Retry download" : recovery ? "Check job" : "Try again"}
-                      </button>
-                    ) : null}
-                    <PickButton className="btn" onFile={takeVideo}>
-                      Another video
-                    </PickButton>
-                  </div>
-                ) : videoOff && parts && !building ? (
-                  <div className="r3d-status-actions">
+                    <button type="button" className="btn dark" onClick={() => void (recovery ? resume() : run())}>
+                      {recovery?.kind === "download" ? "Retry download" : recovery ? "Check job" : "Try again"}
+                    </button>
                     <PickButton className="btn" onFile={takeVideo}>
                       Another video
                     </PickButton>
                   </div>
                 ) : (
                   <span className="track" aria-hidden="true">
-                    <i style={{ width: `${Math.round(loaderBar * 100)}%` }} />
+                    <i style={{ width: `${Math.round(tiles * 100)}%` }} />
                   </span>
                 )}
               </div>
@@ -1056,7 +985,7 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
               <div className="lab">
                 {control.label}
                 {control.type === "slider" ? (
-                  <b>{control.key === "polygons" && polygonCount > 0 ? polygonCount : controlValue(values, control.key)}</b>
+                  <b>{controlValue(values, control.key)}</b>
                 ) : null}
                 {control.type === "text" && control.optional ? <b>optional</b> : null}
               </div>
@@ -1100,11 +1029,6 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
                     onChange={(event) => setControl(control.key, event.target.value)}
                   />
                 </div>
-              ) : null}
-              {control.type === "slider" && control.key === "polygons" && scene ? (
-                <p className="field-note">
-                  {scene.subject} at {scene.time.toFixed(1)}s. Drag left for bigger boxes. Changes stay in the browser.
-                </p>
               ) : null}
               {control.type === "text" ? (
                 <>
@@ -1168,12 +1092,6 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
                 onHot={(on) => setHot(on ? image.key : null)}
               />
             ))}
-          {app.kind === "reverse-3d" && scene && active ? (
-            <div className="scene-dock">
-              {sceneView}
-              <div className="scene-caption">{sceneCaption}</div>
-            </div>
-          ) : null}
           {app.hasSeed ? (
             <div className="seedline">
               Seed <b>{seed ?? "—"}</b>
@@ -1264,20 +1182,13 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
                 )}
               </div>
             ) : null}
-            {showScenePreview ? (
-              <div className="shot-wrap scene-stage">
-                {sceneView}
-                <div className="scene-caption">{sceneCaption}</div>
-              </div>
-            ) : null}
-            {!active && primaryUpload && !showScenePreview ? (
+            {!active && primaryUpload ? (
               <div className="shot-wrap">
                 <ResultMedia
                   url={primaryUpload.url}
                   video={imageSpec(primaryKey ?? "")?.accept === "video"}
                   alt="Uploaded file"
                 />
-                {app.kind === "reverse-3d" && sceneState === "building" ? <div className="scene-caption">{sceneCaption}</div> : null}
               </div>
             ) : null}
             {!active && !primaryUpload && selectedScene ? (

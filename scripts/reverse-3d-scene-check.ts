@@ -44,6 +44,7 @@ import {
   parseSceneMarks,
   parseSubjectChoice,
   partOnFrame,
+  selectImageOutput,
   selectMeshOutput,
   selectTextOutput,
   MESH_KEEP_FRACTION,
@@ -152,10 +153,10 @@ function renderClip(seconds: number, ext: "mp4" | "webm"): Buffer {
   return readFileSync(file);
 }
 
-async function postReverse(video: Buffer, scene: Buffer | null, name = "clip.mp4", type = "video/mp4") {
+async function postReverse(video: Buffer, reference: Buffer | null, name = "clip.mp4", type = "video/mp4") {
   const form = new FormData();
   form.append("video", new File([new Uint8Array(video)], name, { type }));
-  if (scene) form.append("scene", new File([new Uint8Array(scene)], "scene.png", { type: "image/png" }));
+  if (reference) form.append("reference", new File([new Uint8Array(reference)], "reference.png", { type: "image/png" }));
   const response = await POST(new Request("http://localhost/api/run/reverse-3d", { method: "POST", body: form }), {
     params: Promise.resolve({ app: "reverse-3d" }),
   });
@@ -168,12 +169,12 @@ async function postReverse(video: Buffer, scene: Buffer | null, name = "clip.mp4
 }
 
 async function main() {
-  assert.equal(REVERSE_3D_MAX_SECONDS, 10);
-  assert.deepEqual(acceptedClipDuration(18), { duration: 10, trimmed: true });
-  assert.deepEqual(acceptedClipDuration(10), { duration: 10, trimmed: false });
-  assert.equal(acceptedClipDuration(10.04).trimmed, false);
-  assert.equal(acceptedClipDuration(10.06).duration, 10);
-  assert.equal(acceptedClipDuration(10.06).trimmed, true);
+  assert.equal(REVERSE_3D_MAX_SECONDS, 5);
+  assert.deepEqual(acceptedClipDuration(18), { duration: 5, trimmed: true });
+  assert.deepEqual(acceptedClipDuration(5), { duration: 5, trimmed: false });
+  assert.equal(acceptedClipDuration(5.04).trimmed, false);
+  assert.equal(acceptedClipDuration(5.06).duration, 5);
+  assert.equal(acceptedClipDuration(5.06).trimmed, true);
   assert.throws(() => acceptedClipDuration(2.9), /at least 3/);
 
   const pick = buildPickWorkflow(12);
@@ -861,26 +862,64 @@ async function main() {
   }
   process.env.COMFY_MOCK = "1";
 
-  // The video job runs in parallel with the 3D subject, so it needs no scene image.
+  // Without the grey still, Kling gets no reference image and a prompt that does not name one.
   const videoOnly = await postReverse(clip4, null);
   assert.equal(videoOnly.status, 200, JSON.stringify(videoOnly.payload.error ?? videoOnly.payload));
+  const bare = videoOnly.payload.request?.workflow;
+  assert.ok(bare);
+  assert.equal(bare["30"], undefined);
+  assert.equal(bare["20"]?.inputs["model.reference_images.image_1"], undefined);
+  assert.doesNotMatch(String(bare["20"]?.inputs["model.prompt"]), /@Image1/);
+  assert.match(String(bare["20"]?.inputs["model.prompt"]), /never turned into a person/);
 
-  // Any length is accepted: the workflow keeps the first 10 seconds itself.
+  // Any length is accepted: the workflow keeps the first 5 seconds itself.
   const longMp4 = await postReverse(clip12, null);
   assert.equal(longMp4.status, 200, JSON.stringify(longMp4.payload.error ?? longMp4.payload));
   const longWebm = await postReverse(webm12, null, "clip.webm", "video/webm");
   assert.equal(longWebm.status, 200, JSON.stringify(longWebm.payload.error ?? longWebm.payload));
 
+  // With the still, it is node 30 and Kling copies its look from @Image1.
   const ok = await postReverse(clip4, png);
   assert.equal(ok.status, 200, JSON.stringify(ok.payload.error ?? ok.payload));
   const workflow = ok.payload.request?.workflow;
   assert.ok(workflow);
   assert.equal(workflow["12"], undefined);
   assert.equal(workflow["11"]?.class_type, "Video Slice");
-  assert.equal(workflow["11"]?.inputs.duration, 10);
+  assert.equal(workflow["11"]?.inputs.duration, 5);
   assert.deepEqual(workflow["15"]?.inputs.video, ["11", 0]);
-  assert.equal(workflow["20"]?.inputs["model.reference_images.image_1"], undefined);
-  assert.doesNotMatch(String(workflow["20"]?.inputs["model.prompt"]), /@Image1/);
+  assert.equal(workflow["30"]?.class_type, "LoadImage");
+  assert.equal((workflow["30"]?.inputs.image as { info?: { file_path?: string } })?.info?.file_path, "reference.png");
+  assert.deepEqual(workflow["20"]?.inputs["model.reference_images.image_1"], ["30", 0]);
+  assert.match(String(workflow["20"]?.inputs["model.prompt"]), /looks exactly like @Image1/);
+  assert.equal(workflow["20"]?.inputs.model, "kling-4.0-flash");
+
+  // The still itself: one Nano Banana job on the first frame.
+  const stillForm = new FormData();
+  stillForm.set("step", "still");
+  stillForm.append("frame", new File([new Uint8Array(png)], "frame.jpg", { type: "image/jpeg" }));
+  const stillResponse = await postSubject(new Request("http://localhost/api/reverse-3d/subject", { method: "POST", body: stillForm }));
+  const stillBody = (await stillResponse.json()) as {
+    mock?: boolean;
+    step?: string;
+    still?: Record<string, { class_type?: string; inputs?: Record<string, unknown> }>;
+    error?: { message?: string };
+  };
+  assert.equal(stillResponse.status, 200, JSON.stringify(stillBody.error));
+  assert.equal(stillBody.step, "still");
+  assert.equal(stillBody.mock, true);
+  assert.equal(stillBody.still?.["2"]?.class_type, "GeminiNanoBanana2V2");
+  assert.equal(stillBody.still?.["2"]?.inputs?.model, "Nano Banana 2 Lite");
+  assert.deepEqual(stillBody.still?.["2"]?.inputs?.["model.images.image_1"], ["1", 0]);
+  assert.match(String(stillBody.still?.["2"]?.inputs?.prompt), /never turn an object into a person/);
+  assert.equal(stillBody.still?.["3"]?.class_type, "SaveImage");
+  const twoFrames = new FormData();
+  twoFrames.set("step", "still");
+  twoFrames.append("frame", new File([new Uint8Array(png)], "a.jpg", { type: "image/jpeg" }));
+  twoFrames.append("frame", new File([new Uint8Array(png)], "b.jpg", { type: "image/jpeg" }));
+  const twoResponse = await postSubject(new Request("http://localhost/api/reverse-3d/subject", { method: "POST", body: twoFrames }));
+  assert.equal(twoResponse.status, 400);
+  assert.equal(selectImageOutput([{ id: "a", name: "reverse-3d/still_00001_.png" }])?.id, "a");
+  assert.equal(selectImageOutput([{ id: "a", name: "reply.txt" }]), null);
   assert.deepEqual(workflow["20"]?.inputs["model.video_1"], ["16", 0]);
 
   const subjectForm = new FormData();

@@ -37,6 +37,7 @@ import { easeSlide, exitOpacity, trackGap } from "../src/lib/ease-slide";
 import { readSceneChoice, signSceneChoice } from "../src/lib/scene-token";
 import { isAllowedVideoMime } from "../src/lib/media";
 import { REVERSE_3D_MAX_SECONDS, REVERSE_3D_MIN_SECONDS } from "../src/lib/video-client";
+import { dropLookReference } from "../src/lib/reverse-3d-look";
 import { videoTypeRejectReason } from "../src/lib/prepare-image";
 import { buildJobBody, redactJobBody } from "../src/lib/workflow";
 
@@ -198,14 +199,12 @@ assert.equal(getApp("reverse-3d")?.output.media, "video");
 assert.equal(getApp("reverse-3d")?.videoInputs?.video.node, "10");
 assert.equal(getApp("reverse-3d")?.videoInputs?.video.maxSeconds, undefined);
 assert.equal(getApp("reverse-3d")?.imageInputs.scene, undefined);
-assert.equal(REVERSE_3D_MAX_SECONDS, 10);
-assert.match(reverseCatalog?.images[0]?.hint ?? "", /10 seconds/);
-assert.doesNotMatch(reverseCatalog?.images[0]?.hint ?? "", /18 seconds/);
-const polygonControl = reverseCatalog?.controls.find((control) => control.key === "polygons");
-assert.equal(polygonControl?.type, "slider");
-assert.equal(polygonControl && polygonControl.type === "slider" ? polygonControl.clientOnly : false, true);
-assert.equal(polygonControl && polygonControl.type === "slider" ? polygonControl.min : 0, 64);
-assert.equal(polygonControl && polygonControl.type === "slider" ? polygonControl.max : 0, 4096);
+assert.deepEqual(getApp("reverse-3d")?.imageInputs.reference, { node: "30", input: "image", maxSide: 1280, optional: true });
+assert.equal(REVERSE_3D_MAX_SECONDS, 5);
+assert.match(reverseCatalog?.images[0]?.hint ?? "", /5 seconds/);
+assert.doesNotMatch(reverseCatalog?.images[0]?.hint ?? "", /10 seconds/);
+assert.equal(reverseCatalog?.images.length, 1, "the still goes up with the run, it is not an upload slot");
+assert.equal(reverseCatalog?.controls.length, 0, "no polygon slider: the 3D blockout is gone from the page");
 assert.equal(REVERSE_3D_MIN_SECONDS, 3);
 assert.equal(isAllowedVideoMime("video/webm;codecs=vp9"), true);
 assert.equal(isAllowedVideoMime("video/mp4;codecs=avc1.42E01E"), true);
@@ -564,7 +563,7 @@ const reverseJob = buildJobBody(
   reverse3d,
   {
     video: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", filePath: "input.mp4" },
-    scene: { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", filePath: "scene.png" },
+    reference: { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", filePath: "reference.png" },
   },
   { seed: 42, hasImage: true },
   "team-key",
@@ -576,7 +575,7 @@ assert.deepEqual(reverseJob.workflow["10"].inputs.file, {
 });
 assert.equal(reverseJob.workflow["11"].class_type, "Video Slice");
 assert.deepEqual(reverseJob.workflow["11"].inputs.video, ["10", 0]);
-assert.equal(reverseJob.workflow["11"].inputs.duration, 10);
+assert.equal(reverseJob.workflow["11"].inputs.duration, 5);
 assert.equal(reverseJob.workflow["15"].class_type, "GetVideoComponents");
 assert.deepEqual(reverseJob.workflow["15"].inputs.video, ["11", 0]);
 assert.equal(reverseJob.workflow["17"].class_type, "ResizeAndPadImage");
@@ -588,6 +587,12 @@ assert.deepEqual(reverseJob.workflow["16"].inputs.audio, ["15", 1]);
 assert.equal(reverseJob.workflow["12"], undefined);
 assert.equal(reverseJob.workflow["20"].class_type, "Kling4EditVideoNode");
 assert.deepEqual(reverseJob.workflow["20"].inputs["model.video_1"], ["16", 0]);
+assert.equal(reverseJob.workflow["20"].inputs.model, "kling-4.0-flash");
+assert.deepEqual(reverseJob.workflow["20"].inputs["model.reference_images.image_1"], ["30", 0]);
+assert.match(String(reverseJob.workflow["20"].inputs["model.prompt"]), /@Image1/);
+// No still came with the run: the run route drops node 30 and the prompt stops naming @Image1.
+dropLookReference(reverseJob.workflow);
+assert.equal(reverseJob.workflow["30"], undefined);
 assert.equal(reverseJob.workflow["20"].inputs["model.reference_images.image_1"], undefined);
 assert.doesNotMatch(String(reverseJob.workflow["20"].inputs["model.prompt"]), /@Image1/);
 assert.equal(reverseJob.workflow["20"].inputs["model.seed"], 42);

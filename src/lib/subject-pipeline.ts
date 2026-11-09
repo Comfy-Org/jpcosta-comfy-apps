@@ -1,6 +1,6 @@
 import type { Workflow } from "@/lib/workflow";
 
-/** Frames sent to the model. The clip is already trimmed to 10 seconds. */
+/** Frames sent to the model. The clip is already trimmed to its first seconds. */
 export const SUBJECT_FRAME_CAP = 12;
 
 /** Most subjects rebuilt from one shot. Each gets a close-up in the marking job, next to the whole frame. */
@@ -745,3 +745,39 @@ export const MOCK_MARK_REPLY = JSON.stringify({
     },
   ],
 });
+
+/**
+ * The look of the playblast: Nano Banana redraws the clip's first frame as a rough grey blocking pass.
+ * The browser un-renders the frame into this image tile by tile while the video renders,
+ * and the video job gets it as Kling's look reference, so every frame matches it.
+ */
+export const STILL_PROMPT = `Turn this exact shot into a rough Blender solid-viewport blocking playblast. Same camera, same framing, same people in the same poses and places, same objects, same layout. Everything is untextured matte light-grey under flat studio light with soft grey shadows and a plain pale-grey sky. Each person becomes a simple low-detail grey mannequin built from smooth primitive shapes: a plain sphere-like head with no face and no hair, a simple torso shape, limbs as smooth capsules, simple rounded hands and feet, no clothes details at all. Animals become simple grey animal shapes. Cars, bicycles and props stay the same objects as simplified grey stand-ins that keep only their main shape; never turn an object into a person. Buildings become a few large plain boxes, the ground a flat plane with a faint grid. Very low detail, like a first animation blocking pass in a 3D viewport. No color, no text.`;
+
+export const STILL_MODEL = "Nano Banana 2 Lite";
+
+/** One Nano Banana job: node 1 is the first frame, node 3 saves the grey still. */
+export function buildStillWorkflow(): Workflow {
+  return {
+    "1": { class_type: "LoadImage", inputs: { image: "frame.png" }, _meta: { title: "First frame" } },
+    "2": {
+      class_type: "GeminiNanoBanana2V2",
+      inputs: {
+        prompt: STILL_PROMPT,
+        model: STILL_MODEL,
+        "model.aspect_ratio": "auto",
+        "model.resolution": "1K",
+        "model.thinking_level": "MINIMAL",
+        "model.images.image_1": ["1", 0],
+        seed: 7,
+        response_modalities: "IMAGE",
+      },
+      _meta: { title: "Playblast look" },
+    },
+    "3": { class_type: "SaveImage", inputs: { images: ["2", 0], filename_prefix: "reverse-3d/still" }, _meta: { title: "Playblast still" } },
+  };
+}
+
+/** The saved still among a job's outputs. */
+export function selectImageOutput(outputs: readonly NamedOutput[]): NamedOutput | null {
+  return outputs.find((item) => /\.(png|jpe?g|webp)$/i.test(item.name)) ?? null;
+}

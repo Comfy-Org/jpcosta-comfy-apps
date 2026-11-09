@@ -9,7 +9,6 @@ import {
 } from "@/lib/choices";
 import { getApp, listVisibleAppIds, type AppConfig } from "@/lib/config";
 import { PUBLIC_APP_IDS } from "@/lib/public-surface";
-import { SCENE_POLYGON_DEFAULT, SCENE_POLYGON_MAX, SCENE_POLYGON_MIN } from "@/lib/scene-mesh";
 import type { CatalogApp, ClientControl, SpriteGrid } from "@/lib/types";
 import { REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
 
@@ -326,20 +325,6 @@ function controlsFor(id: string, app: AppConfig): ClientControl[] {
         options: listBoxPresets().map((preset) => ({ value: preset.id, label: preset.label, image: preset.thumb })),
         default: "kraft_mailer",
         hint: "The sealed lid opens onto this empty insert. The camera stays locked overhead.",
-      },
-    ];
-  }
-  if (id === "reverse-3d") {
-    return [
-      {
-        type: "slider",
-        key: "polygons",
-        label: "Polygons",
-        min: SCENE_POLYGON_MIN,
-        max: SCENE_POLYGON_MAX,
-        step: 64,
-        default: SCENE_POLYGON_DEFAULT,
-        clientOnly: true,
       },
     ];
   }

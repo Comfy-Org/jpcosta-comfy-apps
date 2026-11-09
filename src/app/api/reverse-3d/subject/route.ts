@@ -13,6 +13,7 @@ import {
   buildHunyuanWorkflow,
   buildMarkWorkflow,
   buildPickWorkflow,
+  buildStillWorkflow,
   comboOptions,
   cutoutAssetToken,
   isSubjectKind,
@@ -202,7 +203,15 @@ export async function POST(request: Request) {
     }
     const requested = form.get("step");
     const step =
-      requested === "hunyuan" ? "hunyuan" : requested === "cutout" || requested === "mesh" ? "cutout" : requested === "mark" ? "mark" : "pick";
+      requested === "hunyuan"
+        ? "hunyuan"
+        : requested === "cutout" || requested === "mesh"
+          ? "cutout"
+          : requested === "mark"
+            ? "mark"
+            : requested === "still"
+              ? "still"
+              : "pick";
     const files = form.getAll("frame").filter((entry): entry is File => entry instanceof File && entry.size > 0);
     if (step !== "hunyuan" && files.length === 0) throw new AppError(400, "invalid_input", "Upload a frame from the clip.");
     if (files.length > SUBJECT_FRAME_CAP) {
@@ -239,6 +248,19 @@ export async function POST(request: Request) {
       );
       const jobId = await submitJob(target, { workflow, extra_data: { api_key_comfy_org: key ?? "" } }, crypto.randomUUID());
       return Response.json({ step: "pick", jobId: publicRouteId("reverse-3d", jobId) });
+    }
+
+    // The playblast look: the first frame redrawn as a grey blocking pass. Its image is the video's look reference.
+    if (step === "still") {
+      if (files.length !== 1) throw new AppError(400, "invalid_input", "Upload the first frame once.");
+      const workflow = buildStillWorkflow();
+      if (mock) return Response.json({ mock: true, step: "still", still: workflow });
+      const target = deploymentTarget("reverse-3d");
+      const png = await prepareImage(files[0], FRAME_SIDE);
+      const id = await uploadAsset(target, png, "frame.png", "image/png");
+      wireImage(workflow, "1", id, "frame.png");
+      const jobId = await submitJob(target, { workflow, extra_data: { api_key_comfy_org: key ?? "" } }, crypto.randomUUID());
+      return Response.json({ step: "still", jobId: publicRouteId("reverse-3d", jobId) });
     }
 
     // Second job: the chosen frame and one close-up per subject, each marked part by part.

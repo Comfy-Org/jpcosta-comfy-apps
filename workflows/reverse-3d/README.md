@@ -1,16 +1,28 @@
 # Reverse 3D
 
-Input: a finished video (3 to 10 seconds). Longer clips are trimmed to the first 10 seconds. Kling 4.0 Edit allows 3-30 seconds and keeps the input length; 10 seconds is the longest we send. While the video renders, the page builds a grey 3D blockout of the shot from two Gemini jobs (below). The blockout is only the loading screen: the video job does not use it.
+Input: a finished video, at least 3 seconds. Only the first 5 seconds are used (node 11, Video Slice, and the browser trims to the same 5 seconds). Kling 4.0 Edit allows 3-30 seconds and keeps the input length; the 5 second cap keeps one run near 200 credits.
 
-Output: a blocky Blender-viewport playblast restyle via Kling 4.0 Edit. The side-by-side compare (original left, playblast right) is built in the browser so the graph does not OOM stitching frames. The first frame is dropped on both sides because Kling’s frame 0 is often smeared.
+Output: a rough grey Blender-viewport blocking playblast via Kling 4.0 Flash Edit. The side-by-side compare (original left, playblast right) is built in the browser so the graph does not OOM stitching frames. The first frame is dropped on both sides because Kling's frame 0 is often smeared.
 
-This workflow is playblast-only: LoadVideo → Video Slice (first 10 seconds) → GetVideoComponents → ResizeAndPadImage → CreateVideo (constant 24 fps, original audio) → Kling4EditVideoNode → SaveVideo. Browser MediaRecorder WebMs often have no duration and confuse LoadVideo into reporting 1 fps; re-wrapping the decoded frames at 24 fps keeps the frame count and satisfies Kling’s 24 fps minimum without stitching (which OOMs).
+## The look: one still, then the video
+
+1. **The still (`step=still`).** The browser grabs the clip's first frame (one frame in, 1024 px on the long side) and posts it to `POST /api/reverse-3d/subject`. One job: `LoadImage` → `GeminiNanoBanana2V2` (`Nano Banana 2 Lite`, 1K, thinking `MINIMAL`) → `SaveImage`. The prompt redraws the exact shot as a low-detail grey blocking pass: faceless mannequins, objects kept as simple grey stand-ins and never turned into people, buildings as boxes. About 9 credits and 10 to 20 seconds.
+2. **The video.** The browser re-encodes the still as a JPEG and posts it with the clip as `reference`. It goes to node 30 (`LoadImage`) and into Kling as `model.reference_images.image_1`, and the prompt tells Kling to copy the look of `@Image1` on every frame. If the still failed, the run route deletes node 30 and swaps in a prompt that describes the same look without `@Image1` (`src/lib/reverse-3d-look.ts`).
+3. **The wait.** While Kling renders, the page un-renders the first frame into the still tile by tile, like a Cycles render running backwards (`src/components/tile-unrender.tsx`). Kling rarely reports progress, so the tiles also follow the time the job has taken and flip the rest when the video is ready.
+
+Tested on a 5 second, 4:3 clip of four people and a bicycle: every frame kept the still's look and the bicycle stayed a bicycle. Kling 4.0 Flash is about 38 credits per second of video, so a 5 second clip costs about 190 credits plus 9 for the still.
+
+## The graph
+
+LoadVideo → Video Slice (first 5 seconds) → GetVideoComponents → ResizeAndPadImage → CreateVideo (constant 24 fps, original audio) → Kling4EditVideoNode (with node 30's still) → SaveVideo. Browser MediaRecorder WebMs often have no duration and confuse LoadVideo into reporting 1 fps; re-wrapping the decoded frames at 24 fps keeps the frame count and satisfies Kling's 24 fps minimum without stitching (which OOMs).
 
 Kling 4.0 Edit requires both sides between 700 and 4553 pixels and a width/height ratio from 0.40 to 2.50. Node 17 runs on every clip. The server sets its canvas from the file: MP4/MOV sample size, swapped when the track matrix is 90° or 270° so it matches the frames LoadVideo rotates, and WebM PixelWidth/PixelHeight even when the Segment size is the 8-byte unknown length Chrome MediaRecorder writes. It scales uniformly until both sides are at least 700, keeps an already-legal frame as-is up to 1920×1080, and pads with black only when the ratio is outside 0.40–2.50 (smallest legal canvas, 700×1750 or 1750×700). Nothing is cropped or stretched. The long side stays at or under 1920 so a 10 second 24 fps batch does not grow toward Kling’s 4553px ceiling.
 
-**The video is switched off for now.** `src/lib/reverse-3d-switch.ts` holds `REVERSE_3D_RENDERS_VIDEO`. While it is `false`, the page stops at the 3D blockout and offers another video, and `POST /api/run/reverse-3d` answers 503 `video_off` before reading the upload, so no Kling credits are spent. Mock runs stay open for local testing. Set it back to `true` to render the video again.
+`src/lib/reverse-3d-switch.ts` holds `REVERSE_3D_RENDERS_VIDEO`. While it is `false`, `POST /api/run/reverse-3d` answers 503 `video_off` before reading the upload, so no Kling credits are spent. Mock runs stay open for local testing.
 
-## The 3D blockout
+## The old 3D blockout
+
+The page no longer calls these jobs; the subject route still serves them. They are kept here for reference.
 
 **Finding everyone (`step=pick`).** Up to 12 frames across the accepted clip, 512 px on the long side, go to `POST /api/reverse-3d/subject`. The graph is `GeminiNodeV3` (`Gemini 3.5 Flash`, thinking `LOW`, 4096 output tokens) with one image per frame, then `SaveText`. The reply chooses the frame and lists every person, animal and vehicle on it, also ones cut off by the edge or out of focus, plus up to 3 objects someone sits on, rides, holds or carries. At most 8, the most important first. Each has a name, a kind, a box `[ymin, xmin, ymax, xmax]` in 0-1000 and its real height in meters. Tiny boxes and repeats of the same kind are dropped. A reply with no frame number is an error, not a guess.
 

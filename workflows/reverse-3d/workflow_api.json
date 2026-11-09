@@ -16,11 +16,11 @@
         0
       ],
       "start_time": 0,
-      "duration": 10,
+      "duration": 5,
       "strict_duration": false
     },
     "_meta": {
-      "title": "First 10 seconds"
+      "title": "First 5 seconds"
     }
   },
   "15": {
@@ -71,21 +71,34 @@
       "title": "Pack constant 24 fps"
     }
   },
+  "30": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "reference.png"
+    },
+    "_meta": {
+      "title": "Playblast look (first frame, redrawn)"
+    }
+  },
   "20": {
     "class_type": "Kling4EditVideoNode",
     "inputs": {
-      "model": "kling-4.0",
+      "model": "kling-4.0-flash",
       "model.video_1": [
         "16",
         0
       ],
-      "model.prompt": "Restyle @Video1 as an ultra-simple Blender solid-viewport playblast, almost everything made of primitive blocks. EVERY person or character MUST become a primitive-box mannequin: a perfect light-grey CUBE for the head, with a totally flat face of two small black square eyes, one small grey square nose, and a thin short black line for a mouth. No ears, no hair, no eyebrows, no real human face, no likeness of the original person. The body is ONE plain light-grey rectangular box, like a fridge standing on end \u2014 no clothing, no armor, no cape, no logos, no folds, no muscles, no costume colors. If arms or legs are needed they are only short grey boxes or cylinders with no hands, fingers, boots or detail. Any held prop becomes a simple grey or flat-colored box or cylinder. Environment: very simple untextured primitives with flat solid colors \u2014 big boxes for buildings, flat planes for ground and water, a flat sky, chunky untextured colored stand-ins for structures. No windows, no text, no textures, no photos, no reflections, no cinematic lighting. Keep the exact same camera move, framing, character positions, character count and timing as @Video1. Do not add new action.",
+      "model.prompt": "Restyle @Video1 as a rough Blender solid-viewport blocking playblast that looks exactly like @Image1. @Image1 is the first frame of @Video1 already restyled: copy its look for every frame. Everything is untextured matte light-grey under flat studio light with soft grey shadows and a plain pale-grey sky. Every person stays a person, as a simple low-detail grey mannequin made of smooth primitive shapes: plain head with no face, no eyes, no nose, no mouth and no hair on every frame, simple torso, capsule limbs, rounded hands and feet, no clothing details. Every animal stays that animal as a simple grey shape. Every bicycle, car or object stays that same object as a simplified grey stand-in, never turned into a person. Buildings are a few large plain boxes, the ground a flat plane. No color, no textures, no text. Keep the exact camera move, framing, people, positions, motion and timing of @Video1. Do not add or remove anyone.",
       "model.resolution": "720p",
       "model.aspect_ratio": "adaptive",
-      "model.seed": 42
+      "model.seed": 42,
+      "model.reference_images.image_1": [
+        "30",
+        0
+      ]
     },
     "_meta": {
-      "title": "Playblast (Kling 4.0 Edit, blocky)"
+      "title": "Playblast (Kling 4.0 Flash Edit, look from @Image1)"
     }
   },
   "21": {
