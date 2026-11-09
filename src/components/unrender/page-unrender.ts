@@ -29,11 +29,11 @@ const MIN_STEP = 0.05;
 const RESOLVE_CELLS = [3, 6, 12, 24];
 const RESOLVE_NOISE = [0.75, 0.5, 0.28, 0.1];
 /** The hover brush: cells this many times smaller than a render tile, un-rendered within RADIUS of the cursor. */
-const HOVER_SPLIT = 2;
-const HOVER_RADIUS = 1.1;
+const HOVER_SPLIT = 4;
+const HOVER_RADIUS = 0.45;
 /** A brushed cell un-renders through the resolve steps in this long, stays clay, then flips back. */
-const HOVER_RESOLVE_MS = 180;
-const HOVER_HOLD_MS = 900;
+const HOVER_RESOLVE_MS = 90;
+const HOVER_HOLD_MS = 220;
 /** Tiles per frame the shot flips at once its still is in. */
 const SHOT_STEP = 0.4;
 
