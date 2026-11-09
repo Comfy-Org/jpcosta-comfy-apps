@@ -11,9 +11,9 @@ import { prepareVideo, VIDEO_MAX_BYTES } from "@/lib/media";
 import { resolvePaparazziScene } from "@/lib/paparazzi-scene";
 import { saveMockJob } from "@/lib/mock";
 import { parseRunParams } from "@/lib/params";
-import { applyKlingFrame, readVideoPixelSize } from "@/lib/kling-frame";
+import { readVideoPixelSize } from "@/lib/kling-frame";
 import { isPublicApp } from "@/lib/public-surface";
-import { dropLookReference } from "@/lib/reverse-3d-look";
+import { applyPlayblastShape, dropLookReference } from "@/lib/reverse-3d-look";
 import { REVERSE_3D_RENDERS_VIDEO } from "@/lib/reverse-3d-switch";
 import { durationOverCap, readContainerDurationSeconds } from "@/lib/video-duration";
 import { buildJobBody, filePathFor, redactJobBody, type UploadedAsset } from "@/lib/workflow";
@@ -29,6 +29,18 @@ type MediaPart = {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
+
+/**
+ * How long the clip is, for the 16 fps frame count: the file's own duration when it can be read,
+ * capped by the length the browser measured (it trims to the first 10 seconds).
+ */
+function clipSeconds(video: Buffer, sent: FormDataEntryValue | null): number | null {
+  const fromFile = readContainerDurationSeconds(video);
+  const fromBrowser = typeof sent === "string" ? Number.parseFloat(sent) : Number.NaN;
+  const browser = Number.isFinite(fromBrowser) && fromBrowser > 0 ? fromBrowser : null;
+  if (fromFile !== null && fromFile > 0) return browser !== null ? Math.min(fromFile, browser) : fromFile;
+  return browser;
+}
 
 /** Takes the email's free video before the job goes out, and gives it back if the job could not start. */
 async function submitWithAccess(access: Access | null, submit: () => Promise<string>): Promise<string> {
@@ -61,7 +73,7 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
     } catch {
       throw new AppError(400, "invalid_input", "Upload the image as form data.");
     }
-    // Unrender spends partner credits: a visitor's own key pays for itself, an email gets one free video.
+    // Unrender spends the deployment's GPU time: a visitor brings a key or signs in with an email for one free video.
     let access: Access | null = null;
     if (appId === "reverse-3d") {
       access = requireAccess(request, form);
@@ -169,7 +181,7 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
     if (appId === "reverse-3d" && media.video) {
       const dims = readVideoPixelSize(media.video.bytes);
       if (!dims) throw new AppError(400, "invalid_input", "Could not read that video's dimensions.");
-      applyKlingFrame(body.workflow, dims.width, dims.height);
+      applyPlayblastShape(body.workflow, dims.width, dims.height, clipSeconds(media.video.bytes, form.get("seconds")));
       if (!assets.reference) dropLookReference(body.workflow);
       if (access?.kind === "key") body.extra_data = { ...body.extra_data, api_key_comfy_org: access.key };
     }

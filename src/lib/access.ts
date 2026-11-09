@@ -5,7 +5,7 @@ import { kvConfigured, kvCount, kvDelete, kvGet, kvSetIfAbsent } from "@/lib/kv"
 
 /**
  * Who may start a paid job on Unrender.
- * - A visitor's own Comfy API key: partner nodes (Nano Banana, Kling) bill that key, so there is no limit here.
+ * - A visitor's own Comfy API key. The open-source graph has no partner nodes, so the deployment's account pays the GPU time either way.
  * - An email signed in with a code: one free video per email, paid by the app's key.
  * The code and the session are signed tokens; the store only keeps which emails used their video and the counters.
  */

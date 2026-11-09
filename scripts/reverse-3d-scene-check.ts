@@ -872,15 +872,26 @@ async function main() {
   }
   process.env.COMFY_MOCK = "1";
 
-  // Without the grey still, Kling gets no reference image and a prompt that does not name one.
+  // Without the grey still, VACE renders from the depth pass alone: no node 30-32 and no reference image.
   const videoOnly = await postReverse(clip4, null);
   assert.equal(videoOnly.status, 200, JSON.stringify(videoOnly.payload.error ?? videoOnly.payload));
   const bare = videoOnly.payload.request?.workflow;
   assert.ok(bare);
   assert.equal(bare["30"], undefined);
-  assert.equal(bare["20"]?.inputs["model.reference_images.image_1"], undefined);
-  assert.doesNotMatch(String(bare["20"]?.inputs["model.prompt"]), /@Image1/);
-  assert.match(String(bare["20"]?.inputs["model.prompt"]), /never turned into a person/);
+  assert.equal(bare["31"], undefined);
+  assert.equal(bare["32"], undefined);
+  assert.equal(bare["49"]?.class_type, "WanVaceToVideo");
+  assert.equal(bare["49"]?.inputs.reference_image, undefined);
+  assert.deepEqual(bare["49"]?.inputs.control_video, ["40", 0]);
+  // A 4 second 160x90 clip: 16 fps makes 65 frames (4n + 1), at 832x464 (16:9 on 16-pixel blocks).
+  assert.equal(bare["12"]?.inputs.num_frames, 65);
+  assert.equal(bare["49"]?.inputs.length, 65);
+  assert.equal(bare["49"]?.inputs.width, 832);
+  assert.equal(bare["49"]?.inputs.height, 464);
+  assert.equal(bare["17"]?.inputs.width, 832);
+  assert.equal(bare["17"]?.inputs.height, 464);
+  assert.equal(bare["40"]?.inputs.resolution, 464);
+  assert.equal(JSON.stringify(bare).includes("Kling"), false);
 
   // Any length is accepted: the workflow keeps the first 10 seconds itself.
   const longMp4 = await postReverse(clip12, null);
@@ -888,22 +899,36 @@ async function main() {
   const longWebm = await postReverse(webm12, null, "clip.webm", "video/webm");
   assert.equal(longWebm.status, 200, JSON.stringify(longWebm.payload.error ?? longWebm.payload));
 
-  // With the still, it is node 30 and Kling copies its look from @Image1.
+  // With the still, it is node 30: its colour comes out (31), it is sized to the video (32) and VACE copies its look.
   const ok = await postReverse(clip4, png);
   assert.equal(ok.status, 200, JSON.stringify(ok.payload.error ?? ok.payload));
   const workflow = ok.payload.request?.workflow;
   assert.ok(workflow);
-  assert.equal(workflow["12"], undefined);
   assert.equal(workflow["11"]?.class_type, "Video Slice");
   assert.equal(workflow["11"]?.inputs.duration, 10);
-  assert.deepEqual(workflow["15"]?.inputs.video, ["11", 0]);
+  assert.equal(workflow["12"]?.class_type, "VideoFrameSample");
+  assert.deepEqual(workflow["12"]?.inputs.video, ["11", 0]);
+  assert.deepEqual(workflow["15"]?.inputs.video, ["12", 0]);
   assert.equal(workflow["30"]?.class_type, "LoadImage");
   assert.equal((workflow["30"]?.inputs.image as { info?: { file_path?: string } })?.info?.file_path, "reference.png");
-  assert.deepEqual(workflow["20"]?.inputs["model.reference_images.image_1"], ["30", 0]);
-  assert.match(String(workflow["20"]?.inputs["model.prompt"]), /looks exactly like @Image1/);
-  assert.equal(workflow["20"]?.inputs.model, "kling-4.0-flash");
+  assert.equal(workflow["31"]?.class_type, "ImageDesaturate+");
+  assert.deepEqual(workflow["32"]?.inputs.image, ["31", 0]);
+  assert.equal(workflow["32"]?.inputs.width, 832);
+  assert.deepEqual(workflow["49"]?.inputs.reference_image, ["32", 0]);
+  assert.equal(workflow["106"]?.inputs.unet_name, "wan2.1_vace_14B_fp16.safetensors");
+  assert.equal(workflow["3"]?.inputs.steps, 4);
+  // The colour comes out of the playblast too, before it is packed at 16 fps.
+  assert.equal(workflow["33"]?.class_type, "ImageDesaturate+");
+  assert.deepEqual(workflow["33"]?.inputs.image, ["8", 0]);
+  assert.deepEqual(workflow["16"]?.inputs.images, ["33", 0]);
+  assert.equal(workflow["16"]?.inputs.fps, 16);
+  assert.deepEqual(workflow["21"]?.inputs.video, ["16", 0]);
 
-  // The still itself: one Nano Banana job on the first frame.
+  // A 12 second clip is sampled as its first 10 seconds: 161 frames.
+  assert.equal(longMp4.payload.request?.workflow?.["12"]?.inputs.num_frames, 161);
+
+
+  // The still itself: one Qwen Image Edit job on the first frame, with its colour taken out.
   const stillForm = new FormData();
   stillForm.set("comfyKey", VISITOR_KEY);
   stillForm.set("step", "still");
@@ -918,11 +943,18 @@ async function main() {
   assert.equal(stillResponse.status, 200, JSON.stringify(stillBody.error));
   assert.equal(stillBody.step, "still");
   assert.equal(stillBody.mock, true);
-  assert.equal(stillBody.still?.["2"]?.class_type, "GeminiNanoBanana2V2");
-  assert.equal(stillBody.still?.["2"]?.inputs?.model, "Nano Banana 2 Lite");
-  assert.deepEqual(stillBody.still?.["2"]?.inputs?.["model.images.image_1"], ["1", 0]);
-  assert.match(String(stillBody.still?.["2"]?.inputs?.prompt), /never turn an object into a person/);
+  assert.equal(stillBody.still?.["10"]?.class_type, "UNETLoader");
+  assert.match(String(stillBody.still?.["10"]?.inputs?.unet_name), /^qwen_image_edit_2511/);
+  assert.equal(stillBody.still?.["14"]?.class_type, "TextEncodeQwenImageEditPlus");
+  assert.deepEqual(stillBody.still?.["13"]?.inputs?.image, ["1", 0]);
+  assert.match(String(stillBody.still?.["14"]?.inputs?.prompt), /never turn an object into a person/);
+  assert.match(String(stillBody.still?.["14"]?.inputs?.prompt), /nothing keeps its original color/);
+  assert.equal(stillBody.still?.["18"]?.inputs?.steps, 4);
+  assert.equal(stillBody.still?.["2"]?.class_type, "ImageDesaturate+");
+  assert.deepEqual(stillBody.still?.["2"]?.inputs?.image, ["19", 0]);
   assert.equal(stillBody.still?.["3"]?.class_type, "SaveImage");
+  assert.deepEqual(stillBody.still?.["3"]?.inputs?.images, ["2", 0]);
+  assert.equal(JSON.stringify(stillBody.still).includes("Nano Banana"), false);
   const twoFrames = new FormData();
   twoFrames.set("comfyKey", VISITOR_KEY);
   twoFrames.set("step", "still");
@@ -977,7 +1009,6 @@ async function main() {
   assert.equal((await askCode("someone@example.com")).status, 409, "a used email gets no new code");
   // The same email with its own key still works.
   assert.equal((await postReverse(clip4, png)).status, 200);
-  assert.deepEqual(workflow["20"]?.inputs["model.video_1"], ["16", 0]);
 
   const subjectForm = new FormData();
   subjectForm.set("comfyKey", VISITOR_KEY);
@@ -1072,7 +1103,7 @@ async function main() {
     { seed: 1, hasImage: true },
     null,
   );
-  assert.equal(videoOnlyJob.workflow["12"], undefined);
+  assert.equal(videoOnlyJob.workflow["12"]?.class_type, "VideoFrameSample");
 
   console.log("reverse-3d-scene-check ok");
 }

@@ -351,20 +351,20 @@ export async function requestSubjectModel(
   );
 }
 
-/** Longer side of the first frame Nano Banana redraws, and of the frame the wait screen un-renders. */
+/** Longer side of the first frame Qwen Image Edit redraws, and of the frame the wait screen un-renders. */
 export const STILL_FRAME_SIDE = 1024;
-/** The "first frame": one frame in at 24 fps, close enough to Kling's frame 0. */
+/** The "first frame": one frame in at 24 fps, close enough to the video's frame 0. */
 const STILL_FRAME_TIME = 1 / 24;
 
 export type PlayblastLook = {
-  /** The clip's first frame, as Kling sees it. */
+  /** The clip's first frame. */
   frame: Blob;
   /** The same frame redrawn as a grey blocking pass, or null when that job did not work. */
   still: Blob | null;
   mock?: boolean;
 };
 
-/** Nano Banana saves a PNG of about 1 MB. As a JPEG it leaves room for the clip in the run's 4.5 MB form. */
+/** The still job saves a PNG of about 1 MB. As a JPEG it leaves room for the clip in the run's 4.5 MB form. */
 async function asJpeg(image: Blob): Promise<Blob> {
   const bitmap = await createImageBitmap(image);
   const canvas = document.createElement("canvas");
@@ -377,7 +377,7 @@ async function asJpeg(image: Blob): Promise<Blob> {
   return jpegFrame(canvas, 0.9);
 }
 
-/** Mock mode only: a flat grey version of the frame stands in for Nano Banana's still. */
+/** Mock mode only: a flat grey version of the frame stands in for the redrawn still. */
 function mockStill(source: HTMLCanvasElement): Blob {
   const canvas = document.createElement("canvas");
   canvas.width = source.width;
@@ -390,8 +390,8 @@ function mockStill(source: HTMLCanvasElement): Blob {
 }
 
 /**
- * The playblast's look, before the video job: the first frame goes to one Nano Banana job that redraws it
- * as a rough grey blocking still. The video job sends that still to Kling as `@Image1`.
+ * The playblast's look, before the video job: the first frame goes to one Qwen Image Edit job that redraws it
+ * as a rough grey blocking still. The video job gives that still to Wan VACE as its look reference.
  * Only a frame that cannot be read throws. A still that fails comes back as null, and the video runs without it.
  */
 export async function requestPlayblastLook(

@@ -37,7 +37,7 @@ import { easeSlide, exitOpacity, trackGap } from "../src/lib/ease-slide";
 import { readSceneChoice, signSceneChoice } from "../src/lib/scene-token";
 import { isAllowedVideoMime } from "../src/lib/media";
 import { REVERSE_3D_MAX_SECONDS, REVERSE_3D_MIN_SECONDS } from "../src/lib/video-client";
-import { dropLookReference } from "../src/lib/reverse-3d-look";
+import { applyPlayblastShape, dropLookReference, fitPlayblastFrame, playblastFrameCount } from "../src/lib/reverse-3d-look";
 import { videoTypeRejectReason } from "../src/lib/prepare-image";
 import { buildJobBody, redactJobBody } from "../src/lib/workflow";
 
@@ -193,7 +193,7 @@ assert.equal(getApp("pumpkin-carve")?.partnerNodes, true);
 assert.equal(getApp("pumpkin-carve")?.output.node, "50");
 assert.equal(getApp("pumpkin-carve")?.output.media, "video");
 assert.equal(getApp("reverse-3d")?.enabled, true);
-assert.equal(getApp("reverse-3d")?.partnerNodes, true);
+assert.equal(getApp("reverse-3d")?.partnerNodes, false);
 assert.equal(getApp("reverse-3d")?.output.node, "21");
 assert.equal(getApp("reverse-3d")?.output.media, "video");
 assert.equal(getApp("reverse-3d")?.videoInputs?.video.node, "10");
@@ -575,28 +575,36 @@ assert.deepEqual(reverseJob.workflow["10"].inputs.file, {
 assert.equal(reverseJob.workflow["11"].class_type, "Video Slice");
 assert.deepEqual(reverseJob.workflow["11"].inputs.video, ["10", 0]);
 assert.equal(reverseJob.workflow["11"].inputs.duration, 10);
+assert.equal(reverseJob.workflow["12"].class_type, "VideoFrameSample");
+assert.equal(reverseJob.workflow["12"].inputs.strategy, "uniform");
 assert.equal(reverseJob.workflow["15"].class_type, "GetVideoComponents");
-assert.deepEqual(reverseJob.workflow["15"].inputs.video, ["11", 0]);
-assert.equal(reverseJob.workflow["17"].class_type, "ResizeAndPadImage");
+assert.deepEqual(reverseJob.workflow["15"].inputs.video, ["12", 0]);
+assert.equal(reverseJob.workflow["17"].class_type, "ImageScale");
 assert.deepEqual(reverseJob.workflow["17"].inputs.image, ["15", 0]);
-assert.equal(reverseJob.workflow["16"].class_type, "CreateVideo");
-assert.equal(reverseJob.workflow["16"].inputs.fps, 24);
-assert.deepEqual(reverseJob.workflow["16"].inputs.images, ["17", 0]);
-assert.deepEqual(reverseJob.workflow["16"].inputs.audio, ["15", 1]);
-assert.equal(reverseJob.workflow["12"], undefined);
-assert.equal(reverseJob.workflow["20"].class_type, "Kling4EditVideoNode");
-assert.deepEqual(reverseJob.workflow["20"].inputs["model.video_1"], ["16", 0]);
-assert.equal(reverseJob.workflow["20"].inputs.model, "kling-4.0-flash");
-assert.deepEqual(reverseJob.workflow["20"].inputs["model.reference_images.image_1"], ["30", 0]);
-assert.match(String(reverseJob.workflow["20"].inputs["model.prompt"]), /@Image1/);
-// No still came with the run: the run route drops node 30 and the prompt stops naming @Image1.
+assert.deepEqual(reverseJob.workflow["40"].inputs.image, ["17", 0]);
+assert.equal(reverseJob.workflow["49"].class_type, "WanVaceToVideo");
+assert.deepEqual(reverseJob.workflow["49"].inputs.control_video, ["40", 0]);
+assert.deepEqual(reverseJob.workflow["49"].inputs.reference_image, ["32", 0]);
+assert.equal(reverseJob.workflow["3"].inputs.seed, 42);
+assert.equal(reverseJob.workflow["16"].inputs.fps, 16);
+assert.equal(JSON.stringify(reverseJob.workflow).includes("Kling"), false);
+// The run route fits the graph to the clip: a 1920x1080, 10 second clip renders 161 frames at 832x464.
+assert.deepEqual(applyPlayblastShape(reverseJob.workflow, 1920, 1080, 10), { width: 832, height: 464, frames: 161 });
+assert.equal(reverseJob.workflow["32"].inputs.width, 832);
+assert.deepEqual(fitPlayblastFrame(1080, 1920), { width: 464, height: 832 });
+assert.deepEqual(fitPlayblastFrame(960, 720), { width: 832, height: 624 });
+assert.equal(playblastFrameCount(3), 49);
+assert.equal(playblastFrameCount(null), 161);
+assert.equal(playblastFrameCount(30), 161);
+// No still came with the run: nodes 30-32 go and VACE gets no reference image.
 dropLookReference(reverseJob.workflow);
 assert.equal(reverseJob.workflow["30"], undefined);
-assert.equal(reverseJob.workflow["20"].inputs["model.reference_images.image_1"], undefined);
-assert.doesNotMatch(String(reverseJob.workflow["20"].inputs["model.prompt"]), /@Image1/);
-assert.equal(reverseJob.workflow["20"].inputs["model.seed"], 42);
+assert.equal(reverseJob.workflow["31"], undefined);
+assert.equal(reverseJob.workflow["32"], undefined);
+assert.equal(reverseJob.workflow["49"].inputs.reference_image, undefined);
 assert.equal(reverseJob.workflow["21"].class_type, "SaveVideo");
-assert.equal(reverseJob.extra_data?.api_key_comfy_org, "team-key");
+assert.equal(reverseJob.extra_data, undefined);
+
 
 const stillPrompt = String(carveJob.workflow["30"].inputs.prompt);
 const blankPrompt = String(carveJob.workflow["32"].inputs.prompt);

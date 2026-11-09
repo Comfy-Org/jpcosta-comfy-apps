@@ -4,7 +4,6 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getApp } from "../src/lib/config";
 import {
   KLING_FRAME_MAX_PIXELS,
   KLING_FRAME_MAX_SIDE,
@@ -17,7 +16,7 @@ import {
   readVideoPixelSize,
   type KlingFrame,
 } from "../src/lib/kling-frame";
-import { buildJobBody } from "../src/lib/workflow";
+import type { Workflow } from "../src/lib/workflow";
 
 function assertLegal(frame: KlingFrame) {
   assert.ok(frame.width >= KLING_MIN_SIDE && frame.height >= KLING_MIN_SIDE);
@@ -93,17 +92,12 @@ function main() {
 
   assert.throws(() => fitKlingFrame(8000, 1), /too thin/);
 
-  const app = getApp("reverse-3d");
-  if (!app) throw new Error("missing reverse-3d");
-  const job = buildJobBody(
-    app,
-    {
-      video: { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", filePath: "input.mp4" },
-      scene: { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", filePath: "scene.png" },
-    },
-    { seed: 9, hasImage: true },
-    "team-key",
-  );
+  // The Kling graph is kept beside the open-source one (workflow_kling_api.json) and still fits its frames here.
+  const job = {
+    workflow: JSON.parse(
+      readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../workflows/reverse-3d/workflow_kling_api.json"), "utf8"),
+    ) as Workflow,
+  };
   const fitted = applyKlingFrame(job.workflow, 720, 406);
   assert.equal(fitted.width, 1242);
   assert.equal(fitted.height, 700);

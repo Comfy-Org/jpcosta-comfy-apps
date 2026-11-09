@@ -438,7 +438,7 @@
       "workflow": "workflows/reverse-3d/workflow_api.json",
       "cloudWorkflowId": "pending",
       "cloudWorkflowName": "comfy-api-apps - Reverse 3D",
-      "partnerNodes": true,
+      "partnerNodes": false,
       "imageInputs": {
         "reference": {
           "node": "30",
@@ -456,12 +456,12 @@
       },
       "params": {
         "seed": {
-          "node": "20",
-          "input": "model.seed"
+          "node": "3",
+          "input": "seed"
         }
       },
       "promptTemplate": null,
-      "notes": "Kling 4.0 Flash Edit playblast, at most the first 10 s (node 11, Video Slice), about 400 credits a run. Before the video, the page sends the clip's first frame to /api/reverse-3d/subject step=still: Nano Banana 2 Lite redraws it as a grey blocking still. The browser posts that still as `reference` (node 30), and Kling copies its look from @Image1 on every frame. If the still fails, the run route removes node 30 and swaps in a prompt without @Image1. While the video renders, the page un-renders the first frame into the still tile by tile. Node 17 fits every frame to at least 700px on both sides before Kling (aspect kept; black pad only outside 0.40–2.50). Side-by-side compare is built in the browser (original left, playblast right). The older 3D blockout jobs (pick, mark, cutout, hunyuan) are still served by the subject route but the page no longer calls them. Serverless COMFY_BASE_URL_REVERSE_3D + COMFY_API_KEY_TEAM.",
+      "notes": "Open-source playblast on the serverless GPU, at most the first 10 s (node 11, Video Slice). Node 12 samples the clip at 16 fps (frame count set per clip by the run route, 4n+1, 161 for 10 s), node 17 sizes every frame (longer side 832, 16-pixel blocks), node 40 takes a depth pass, and Wan 2.1 VACE 14B with the lightx2v 4-step LoRA (node 49, 3) renders the playblast from that depth and the grey still. Before the video, the page sends the clip's first frame to /api/reverse-3d/subject step=still: Qwen Image Edit 2511 (4 steps) redraws it as a grey blocking still, and its colour is taken out. The browser posts that still as `reference` (node 30, desaturated again in 31, sized in 32). If the still fails, the run route removes nodes 30-32 and VACE renders from the depth pass alone. The playblast's colour is taken out (node 33) before it is packed at 16 fps. About 110 GPU seconds for 10 s (roughly 32 credits). The Kling graph it replaced is kept in workflow_kling_api.json. Side-by-side compare is built in the browser. The older 3D blockout jobs (pick, mark, cutout, hunyuan) are still served by the subject route but the page no longer calls them. Serverless COMFY_BASE_URL_REVERSE_3D + COMFY_API_KEY_TEAM.",
       "output": {
         "node": "21",
         "media": "video"

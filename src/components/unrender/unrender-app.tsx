@@ -20,7 +20,8 @@ type Stage = "idle" | "gate" | "reading" | "look" | "render" | "finishing" | "re
 
 type AccessInfo = { email: string | null; used: boolean; emailLogin: boolean; mock: boolean };
 
-type Clip = { file: File; url: string; trimmed: boolean };
+/** `seconds`: the length the browser measured, at most 10; the server samples that much at 16 fps. */
+type Clip = { file: File; url: string; trimmed: boolean; seconds?: number };
 
 type Result = { jobId: string; blob: Blob; url: string; compareBlob?: Blob; compareError?: string };
 
@@ -29,8 +30,8 @@ type Recovery = { jobId: string; outputId?: string; sig?: string };
 const RUN_ENDPOINT = "/api/run/reverse-3d";
 const KEY_STORAGE = "unrender:comfyKey";
 const KEYS_URL = "https://platform.comfy.org/profile/api-keys";
-/** About how long the video job takes, for the tiles while Kling reports no progress. */
-const TYPICAL_SECONDS = 240;
+/** About how long the video job takes (VACE renders 10 s in about two minutes, plus loading the models). */
+const TYPICAL_SECONDS = 150;
 const POLL_LIMIT_MS = 20 * 60 * 1000;
 /** The demo plays the whole un-render on the example clip with no job and no credits. */
 const DEMO = { clip: "/examples/plaza.mp4", frame: "/examples/plaza.jpg", still: "/examples/plaza-still.jpg", playblast: "/examples/plaza-playblast.mp4" };
@@ -198,7 +199,7 @@ export function UnrenderApp() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // Kling rarely reports progress, so the tiles also follow the time the job has taken.
+  // The job reports progress only per sampler step, so the tiles also follow the time the job has taken.
   const estimate = 1 - Math.exp(-waited / (TYPICAL_SECONDS / 2.5));
   const share = Math.max(progress, estimate);
   const preparing = stage === "reading" || stage === "look";
@@ -379,7 +380,12 @@ export function UnrenderApp() {
     try {
       const prepared = await prepareReverse3dUpload(file);
       if (controller.signal.aborted) return;
-      const ready: Clip = { file: prepared.file, url: URL.createObjectURL(prepared.file), trimmed: prepared.trimmed };
+      const ready: Clip = {
+        file: prepared.file,
+        url: URL.createObjectURL(prepared.file),
+        trimmed: prepared.trimmed,
+        seconds: prepared.duration,
+      };
       setClip(ready);
       setStage("look");
       setNote("Drawing the playblast look…");
@@ -414,6 +420,7 @@ export function UnrenderApp() {
     setWaited(0);
     const form = new FormData();
     form.append("video", ready.file, ready.file.name);
+    if (ready.seconds) form.append("seconds", ready.seconds.toFixed(3));
     if (still) form.append("reference", still, "reference.jpg");
     if (visitorKey) form.append("comfyKey", visitorKey);
     const response = await fetch(RUN_ENDPOINT, { method: "POST", body: form, signal: controller.signal });
@@ -1007,7 +1014,7 @@ function Gate({
           </form>
         )}
         <p className="ur-fine">
-          It stays in this browser and bills your Comfy account, about 400 credits a video.{" "}
+          It stays in this browser.{" "}
           <a href={KEYS_URL} target="_blank" rel="noopener noreferrer">
             Get a key
           </a>
