@@ -28,6 +28,12 @@ const MIN_STEP = 0.05;
  */
 const RESOLVE_CELLS = [3, 6, 12, 24];
 const RESOLVE_NOISE = [0.75, 0.5, 0.28, 0.1];
+/** The hover brush: cells this many times smaller than a render tile, un-rendered within RADIUS of the cursor. */
+const HOVER_SPLIT = 2;
+const HOVER_RADIUS = 1.1;
+/** A brushed cell un-renders through the resolve steps in this long, stays clay, then flips back. */
+const HOVER_RESOLVE_MS = 180;
+const HOVER_HOLD_MS = 900;
 /** Tiles per frame the shot flips at once its still is in. */
 const SHOT_STEP = 0.4;
 
@@ -134,6 +140,10 @@ export class PageUnrender {
   private filled = false;
   private reduce = reducedMotion();
   private observer: ResizeObserver;
+  /** The hover brush: on while the page is idle; cells under the cursor turn to clay for a moment. */
+  private hoverOn = false;
+  private pointer: { x: number; y: number } | null = null;
+  private brushed = new Map<number, number>();
   /** Called once each time every tile is grey. */
   onFilled: (() => void) | null = null;
 
@@ -144,13 +154,33 @@ export class PageUnrender {
       this.dirty = true;
     });
     this.observer.observe(root);
+    root.addEventListener("pointermove", this.onPointer);
+    root.addEventListener("pointerleave", this.onLeave);
     this.frame = requestAnimationFrame(this.tick);
   }
 
   destroy() {
     cancelAnimationFrame(this.frame);
     this.observer.disconnect();
+    this.root.removeEventListener("pointermove", this.onPointer);
+    this.root.removeEventListener("pointerleave", this.onLeave);
   }
+
+  /** The hover brush is on while the page waits for a shot; it never runs during a render. */
+  setHover(on: boolean) {
+    this.hoverOn = on;
+    if (!on) this.brushed.clear();
+  }
+
+  private onPointer = (event: PointerEvent) => {
+    if (event.pointerType !== "mouse") return;
+    const box = this.root.getBoundingClientRect();
+    this.pointer = { x: event.clientX - box.left, y: event.clientY - box.top };
+  };
+
+  private onLeave = () => {
+    this.pointer = null;
+  };
 
   /** 0 is the styled page, 1 is all grey. */
   setGoal(goal: number) {
@@ -266,9 +296,10 @@ export class PageUnrender {
     }
   }
 
-  private tick = () => {
+  private tick = (now: number) => {
     this.frame = requestAnimationFrame(this.tick);
     if (this.dirty) this.layout();
+    this.brush(now);
     const total = this.order.length;
     const goal = this.goal * total;
     const gap = goal - this.shown;
@@ -280,14 +311,61 @@ export class PageUnrender {
     const shotGap = shotGoal - this.shotShown;
     if (this.reduce || Math.abs(shotGap) < 0.02) this.shotShown = shotGoal;
     else this.shotShown += Math.sign(shotGap) * Math.min(Math.abs(shotGap), Math.max(SHOT_STEP, Math.abs(shotGap) * CATCH_UP));
-    this.draw();
+    this.draw(now);
     if (!this.filled && this.goal === 1 && this.shown >= total && this.shotShown >= shotTotal) {
       this.filled = true;
       this.onFilled?.();
     }
   };
 
-  private draw() {
+  /** Marks the hover cells near the cursor, away from the shot (its slider stays usable). */
+  private brush(now: number) {
+    if (!this.hoverOn || this.goal > 0 || this.shown > 0.01 || !this.pointer) return;
+    const cell = this.width / this.cols / HOVER_SPLIT;
+    const cols = this.cols * HOVER_SPLIT;
+    const rows = Math.ceil(this.height / cell);
+    const shot = this.blocks.find((block) => block.kind === "img");
+    const reach = cell * HOVER_SPLIT * HOVER_RADIUS;
+    const { x, y } = this.pointer;
+    const c0 = Math.max(0, Math.floor((x - reach) / cell));
+    const c1 = Math.min(cols - 1, Math.floor((x + reach) / cell));
+    const r0 = Math.max(0, Math.floor((y - reach) / cell));
+    const r1 = Math.min(rows - 1, Math.floor((y + reach) / cell));
+    for (let row = r0; row <= r1; row += 1) {
+      for (let col = c0; col <= c1; col += 1) {
+        const cx = (col + 0.5) * cell;
+        const cy = (row + 0.5) * cell;
+        if (Math.hypot(cx - x, cy - y) > reach) continue;
+        if (shot && shot.kind === "img" && cx > shot.x && cx < shot.x + shot.w && cy > shot.y && cy < shot.y + shot.h) continue;
+        const index = row * cols + col;
+        const since = this.brushed.get(index);
+        // A cell still clay keeps its start, so it does not un-render again while the cursor sits on it.
+        if (since === undefined || now - since > HOVER_RESOLVE_MS + HOVER_HOLD_MS) this.brushed.set(index, now);
+        else if (now - since > HOVER_RESOLVE_MS) this.brushed.set(index, now - HOVER_RESOLVE_MS);
+      }
+    }
+  }
+
+  private drawBrush(ctx: CanvasRenderingContext2D, now: number) {
+    if (!this.brushed.size) return;
+    const cell = (this.width / this.cols / HOVER_SPLIT) * this.dpr;
+    const cols = this.cols * HOVER_SPLIT;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    for (const [index, since] of this.brushed) {
+      const age = now - since;
+      if (age > HOVER_RESOLVE_MS + HOVER_HOLD_MS) {
+        this.brushed.delete(index);
+        continue;
+      }
+      const sx = Math.floor((index % cols) * cell);
+      const sy = Math.floor(Math.floor(index / cols) * cell);
+      const size = Math.ceil(cell) + 1;
+      if (age < HOVER_RESOLVE_MS && !this.reduce) this.resolveRect(ctx, sx, sy, size, index + 7, age / HOVER_RESOLVE_MS);
+      else ctx.drawImage(this.grey, sx, sy, size, size, sx, sy, size, size);
+    }
+  }
+
+  private draw(now: number) {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     const { dpr, cols } = this;
@@ -297,7 +375,11 @@ export class PageUnrender {
     const done = Math.min(total, Math.floor(this.shown + 1e-6));
     const shotTotal = this.shotOrder.length;
     const shotDone = Math.min(shotTotal, Math.floor(this.shotShown + 1e-6));
-    if (done === 0 && shotDone === 0 && this.goal === 0) return;
+    if (done === 0 && shotDone === 0 && this.goal === 0) {
+      this.drawBrush(ctx, now);
+      return;
+    }
+    this.brushed.clear();
     const tile = this.width / cols;
     const px = tile * dpr;
     const copy = (index: number) => {
@@ -340,11 +422,15 @@ export class PageUnrender {
 
   /** Draws one tile partway resolved: `share` 0 is the coarsest, noisiest step, near 1 the finest. */
   private resolve(ctx: CanvasRenderingContext2D, index: number, px: number, share: number) {
-    const step = this.reduce ? RESOLVE_CELLS.length - 1 : Math.min(RESOLVE_CELLS.length - 1, Math.max(0, Math.floor(share * RESOLVE_CELLS.length)));
-    const cells = RESOLVE_CELLS[step];
     const sx = Math.floor((index % this.cols) * px);
     const sy = Math.floor(Math.floor(index / this.cols) * px);
-    const size = Math.ceil(px) + 1;
+    this.resolveRect(ctx, sx, sy, Math.ceil(px) + 1, index, share);
+  }
+
+  /** The same, for any square in device pixels; `seed` keeps its noise steady within a step. */
+  private resolveRect(ctx: CanvasRenderingContext2D, sx: number, sy: number, size: number, seed: number, share: number) {
+    const step = this.reduce ? RESOLVE_CELLS.length - 1 : Math.min(RESOLVE_CELLS.length - 1, Math.max(0, Math.floor(share * RESOLVE_CELLS.length)));
+    const cells = RESOLVE_CELLS[step];
     const scratch = this.scratch;
     if (scratch.width !== cells) {
       scratch.width = cells;
@@ -354,7 +440,7 @@ export class PageUnrender {
     if (!small) return;
     small.imageSmoothingEnabled = true;
     small.drawImage(this.grey, sx, sy, size, size, 0, 0, cells, cells);
-    const random = seeded(index * 7919 + step * 104729 + 17);
+    const random = seeded(seed * 7919 + step * 104729 + 17);
     for (let cell = 0; cell < cells * cells; cell += 1) {
       if (random() >= RESOLVE_NOISE[step]) continue;
       const base = 70 + random() * 150;

@@ -247,6 +247,11 @@ export function UnrenderApp() {
     engineRef.current?.setGoal(goal);
   }, [goal]);
 
+  // While the page waits for a shot, the cursor un-renders the page around it.
+  useEffect(() => {
+    engineRef.current?.setHover(stage === "idle");
+  }, [stage]);
+
   useEffect(() => {
     if (!preparing) return;
     const started = Date.now();
