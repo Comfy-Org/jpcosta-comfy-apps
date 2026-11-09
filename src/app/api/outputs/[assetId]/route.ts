@@ -1,4 +1,3 @@
-import { readVisitorKeyHeader } from "@/lib/access";
 import { getApp } from "@/lib/config";
 import { fetchAssetUrl } from "@/lib/comfy";
 import { deploymentTarget, getDeployment } from "@/lib/deployments";
@@ -10,7 +9,6 @@ import { sniffVideo, videoContentType } from "@/lib/media";
 import { readMockOutputApp, renderMockOutput } from "@/lib/mock";
 import { isPublicApp } from "@/lib/public-surface";
 import { verifyAssetSignature } from "@/lib/signing";
-import { unrenderTarget } from "@/lib/unrender-cloud";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,8 +56,7 @@ export async function GET(request: Request, context: { params: Promise<{ assetId
     const routed = parsePublicRouteId(assetId);
     if (!routed || !isPublicApp(routed.app) || !getDeployment(routed.app)) throw new AppError(404, "not_found", "Output not found.");
 
-    const target = routed.app === "reverse-3d" ? unrenderTarget(readVisitorKeyHeader(request)) : deploymentTarget(routed.app);
-    const signed = await fetchAssetUrl(target, routed.id);
+    const signed = await fetchAssetUrl(deploymentTarget(routed.app), routed.id);
     let upstream: Response;
     try {
       upstream = await fetch(signed, { redirect: "follow", signal: AbortSignal.timeout(60_000) });

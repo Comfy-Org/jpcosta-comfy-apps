@@ -747,63 +747,31 @@ export const MOCK_MARK_REPLY = JSON.stringify({
 });
 
 /**
- * The look of the playblast: Qwen Image Edit (open source) redraws the clip's first frame as a rough grey blocking pass.
+ * The look of the playblast: Nano Banana redraws the clip's first frame as a rough grey blocking pass.
  * The browser un-renders the frame into this image tile by tile while the video renders,
- * and the video job gets it as VACE's look reference, so every frame matches it.
+ * and the video job gets it as Kling's look reference, so every frame matches it.
  */
-export const STILL_PROMPT = `Turn this exact shot into a rough Blender solid-viewport blocking playblast. Same camera, same framing, same people in the same poses and places, same objects, same layout. Everything is untextured matte light-grey under flat studio light with soft grey shadows and a plain pale-grey sky, including every costume, vehicle, sign and prop: nothing keeps its original color. Each person becomes a simple low-detail grey mannequin built from smooth primitive shapes: a plain sphere-like head with no face and no hair, a simple torso shape, limbs as smooth capsules, simple rounded hands and feet, no clothes details at all. Animals become simple grey animal shapes. Cars, bicycles and props stay the same objects as simplified grey stand-ins that keep only their main shape; never turn an object into a person. Buildings become a few large plain boxes, the ground a flat plane with a faint grid. Very low detail, like a first animation blocking pass in a 3D viewport. No color, no text.`;
+export const STILL_PROMPT = `Turn this exact shot into a rough Blender solid-viewport blocking playblast. Same camera, same framing, same people in the same poses and places, same objects, same layout. Everything is untextured matte light-grey under flat studio light with soft grey shadows and a plain pale-grey sky. Each person becomes a simple low-detail grey mannequin built from smooth primitive shapes: a plain sphere-like head with no face and no hair, a simple torso shape, limbs as smooth capsules, simple rounded hands and feet, no clothes details at all. Animals become simple grey animal shapes. Cars, bicycles and props stay the same objects as simplified grey stand-ins that keep only their main shape; never turn an object into a person. Buildings become a few large plain boxes, the ground a flat plane with a faint grid. Very low detail, like a first animation blocking pass in a 3D viewport. No color, no text.`;
 
-export const STILL_MODEL = "qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_comfyui.safetensors";
+export const STILL_MODEL = "Nano Banana 2 Lite";
 
-/** One Qwen Image Edit job (4 steps): node 1 is the first frame, node 3 saves the grey still with its colour taken out. */
+/** One Nano Banana job: node 1 is the first frame, node 3 saves the grey still. */
 export function buildStillWorkflow(): Workflow {
   return {
     "1": { class_type: "LoadImage", inputs: { image: "frame.png" }, _meta: { title: "First frame" } },
-    "10": { class_type: "UNETLoader", inputs: { unet_name: STILL_MODEL, weight_dtype: "default" }, _meta: { title: "Qwen Image Edit 2511 (4-step)" } },
-    "11": {
-      class_type: "CLIPLoader",
-      inputs: { clip_name: "qwen_2.5_vl_7b_fp8_scaled.safetensors", type: "qwen_image", device: "default" },
-      _meta: { title: "Qwen text encoder" },
-    },
-    "12": { class_type: "VAELoader", inputs: { vae_name: "qwen_image_vae.safetensors" }, _meta: { title: "Qwen VAE" } },
-    "13": {
-      class_type: "ImageScaleToTotalPixels",
-      inputs: { image: ["1", 0], upscale_method: "lanczos", megapixels: 1, resolution_steps: 1 },
-      _meta: { title: "1 megapixel" },
-    },
-    "14": {
-      class_type: "TextEncodeQwenImageEditPlus",
-      inputs: { clip: ["11", 0], vae: ["12", 0], image1: ["13", 0], prompt: STILL_PROMPT },
-      _meta: { title: "Playblast look" },
-    },
-    "15": {
-      class_type: "TextEncodeQwenImageEditPlus",
-      inputs: { clip: ["11", 0], vae: ["12", 0], image1: ["13", 0], prompt: "" },
-      _meta: { title: "Empty negative" },
-    },
-    "16": { class_type: "VAEEncode", inputs: { pixels: ["13", 0], vae: ["12", 0] }, _meta: { title: "Encode frame" } },
-    "17": { class_type: "ModelSamplingAuraFlow", inputs: { model: ["10", 0], shift: 3 }, _meta: { title: "Shift" } },
-    "18": {
-      class_type: "KSampler",
-      inputs: {
-        model: ["17", 0],
-        positive: ["14", 0],
-        negative: ["15", 0],
-        latent_image: ["16", 0],
-        seed: 7,
-        steps: 4,
-        cfg: 1,
-        sampler_name: "euler",
-        scheduler: "simple",
-        denoise: 1,
-      },
-      _meta: { title: "Sample (4 steps)" },
-    },
-    "19": { class_type: "VAEDecode", inputs: { samples: ["18", 0], vae: ["12", 0] }, _meta: { title: "Decode" } },
     "2": {
-      class_type: "ImageDesaturate+",
-      inputs: { image: ["19", 0], factor: 1, method: "luminance (Rec.709)" },
-      _meta: { title: "No color" },
+      class_type: "GeminiNanoBanana2V2",
+      inputs: {
+        prompt: STILL_PROMPT,
+        model: STILL_MODEL,
+        "model.aspect_ratio": "auto",
+        "model.resolution": "1K",
+        "model.thinking_level": "MINIMAL",
+        "model.images.image_1": ["1", 0],
+        seed: 7,
+        response_modalities: "IMAGE",
+      },
+      _meta: { title: "Playblast look" },
     },
     "3": { class_type: "SaveImage", inputs: { images: ["2", 0], filename_prefix: "reverse-3d/still" }, _meta: { title: "Playblast still" } },
   };

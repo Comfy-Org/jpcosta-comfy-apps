@@ -1,9 +1,6 @@
 /** Browser helpers for Reverse 3D: duration checks, upload transcode, side-by-side compare. */
 
-/** A free video (email) uses the first 10 seconds. */
 export const REVERSE_3D_MAX_SECONDS = 10;
-/** With the visitor's own Comfy key: up to 60 seconds, so the compressed clip still fits the 4.5 MB upload. */
-export const REVERSE_3D_KEY_MAX_SECONDS = 60;
 export const REVERSE_3D_MIN_SECONDS = 3;
 export const REVERSE_3D_MIN_WIDTH = 720;
 export const REVERSE_3D_FPS = 24;
@@ -140,16 +137,13 @@ function estimateFrameDuration(video: HTMLVideoElement): number {
   return errorFor(REVERSE_3D_FPS) <= errorFor(30) ? 1 / REVERSE_3D_FPS : 1 / 30;
 }
 
-export function acceptedClipDuration(
-  seconds: number,
-  maxSeconds = REVERSE_3D_MAX_SECONDS,
-): { duration: number; trimmed: boolean } {
+export function acceptedClipDuration(seconds: number): { duration: number; trimmed: boolean } {
   if (!(seconds > 0)) fail("Could not read that video.");
   if (seconds + 0.05 < REVERSE_3D_MIN_SECONDS) {
     fail(`Use a clip of at least ${REVERSE_3D_MIN_SECONDS} seconds.`);
   }
-  const trimmed = seconds > maxSeconds + 0.05;
-  return { duration: trimmed ? maxSeconds : seconds, trimmed };
+  const trimmed = seconds > REVERSE_3D_MAX_SECONDS + 0.05;
+  return { duration: trimmed ? REVERSE_3D_MAX_SECONDS : seconds, trimmed };
 }
 
 export function seekTo(video: HTMLVideoElement, time: number): Promise<void> {
@@ -174,7 +168,7 @@ export function seekTo(video: HTMLVideoElement, time: number): Promise<void> {
   });
 }
 
-export async function prepareReverse3dUpload(file: File, maxSeconds = REVERSE_3D_MAX_SECONDS): Promise<{
+export async function prepareReverse3dUpload(file: File): Promise<{
   file: File;
   width: number;
   height: number;
@@ -185,7 +179,7 @@ export async function prepareReverse3dUpload(file: File, maxSeconds = REVERSE_3D
   if (probe.duration <= 0 || probe.width <= 0 || probe.height <= 0) {
     fail("Could not read that video.");
   }
-  const accepted = acceptedClipDuration(probe.duration, maxSeconds);
+  const accepted = acceptedClipDuration(probe.duration);
   const trimmed = accepted.trimmed;
   const duration = accepted.duration;
   const needsScale = probe.width < REVERSE_3D_MIN_WIDTH;

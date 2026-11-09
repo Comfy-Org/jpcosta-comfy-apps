@@ -1,34 +1,24 @@
-# Reverse 3D (Unrender)
+# Reverse 3D
 
-Input: a finished video. Only the first 10 seconds are used, or 60 with the visitor's own key (node 11, Video Slice, set per clip; the browser trims to the same length).
+Input: a finished video, at least 3 seconds. Only the first 10 seconds are used (node 11, Video Slice, and the browser trims to the same 10 seconds). Kling 4.0 Edit allows 3-30 seconds and keeps the input length.
 
-Output: a rough grey Blender-viewport blocking playblast at 16 fps, made with open-source models only: Qwen Image Edit draws the look, Wan 2.1 VACE renders the video.
-
-## Where it runs and who pays
-
-Unrender submits to Comfy Cloud itself (`https://cloud.comfy.org`, the same Comfy API v2 as a deployment; `src/lib/unrender-cloud.ts`), not to the serverless deployment, which lacks the node packs and models.
-- **The visitor's own Comfy API key:** the still and the video run on their Comfy Cloud account and spend their credits. No limit on how many; clips up to 60 seconds (the browser compresses the clip to fit the 4.5 MB upload). The browser sends the key with each job poll and download as `x-comfy-key`, because the job lives on that account. Their account needs a Comfy Cloud plan that runs workflows.
-- **An email signed in with a code:** one free video, the first 10 seconds, on the app's `COMFY_API_KEY_TEAM`.
-
-Past 10 seconds VACE renders in passes of 161 frames inside the same job (`splitPlayblastPasses`): each pass gets its slice of the depth frames, the same still, prompts and seed, and the passes are joined before the colour comes out. The last pass is padded to 4n + 1 frames and cut back. Tested on Comfy Cloud with two passes of 81 frames: the join shows only a small jump. The side-by-side compare (original left, playblast right) is built in the browser by time, so the 16 fps playblast lines up with the original at any frame rate. The old Kling 4.0 Flash graph is kept as `workflow_kling_api.json`.
+Output: a rough grey Blender-viewport blocking playblast via Kling 4.0 Flash Edit. The side-by-side compare (original left, playblast right) is built in the browser so the graph does not OOM stitching frames. The first frame is dropped on both sides because Kling's frame 0 is often smeared.
 
 ## The look: one still, then the video
 
-1. **The still (`step=still`).** The browser grabs the clip's first frame (one frame in, 1024 px on the long side) and posts it to `POST /api/reverse-3d/subject`. One job (`buildStillWorkflow` in `src/lib/subject-pipeline.ts`): `LoadImage` → `ImageScaleToTotalPixels` (1 MP) → Qwen Image Edit 2511 lightning (4 steps, euler, cfg 1, AuraFlow shift 3) → `ImageDesaturate+` → `SaveImage`. The prompt redraws the exact shot as a low-detail grey blocking pass: faceless mannequins, objects kept as simple grey stand-ins, buildings as boxes, and nothing keeps its colour. The desaturate node takes out any colour the model leaves. About 9 GPU seconds.
-2. **The video.** The browser re-encodes the still as a JPEG and posts it with the clip as `reference`, plus the clip's length in seconds. The still goes to node 30 (`LoadImage`), is desaturated again (31) and scaled to the video size (32), and VACE takes it as `reference_image`. If the still failed, the run route deletes nodes 30 to 32 and VACE renders from the depth pass and the prompt alone (`dropLookReference` in `src/lib/reverse-3d-look.ts`).
-3. **The wait.** While VACE renders, the page un-renders the first frame into the still tile by tile, like a Cycles render running backwards (`src/components/tile-unrender.tsx`). The job reports progress only per sampler step, so the tiles also follow the time the job has taken and flip the rest when the video is ready.
+1. **The still (`step=still`).** The browser grabs the clip's first frame (one frame in, 1024 px on the long side) and posts it to `POST /api/reverse-3d/subject`. One job: `LoadImage` → `GeminiNanoBanana2V2` (`Nano Banana 2 Lite`, 1K, thinking `MINIMAL`) → `SaveImage`. The prompt redraws the exact shot as a low-detail grey blocking pass: faceless mannequins, objects kept as simple grey stand-ins and never turned into people, buildings as boxes. About 9 credits and 10 to 20 seconds.
+2. **The video.** The browser re-encodes the still as a JPEG and posts it with the clip as `reference`. It goes to node 30 (`LoadImage`) and into Kling as `model.reference_images.image_1`, and the prompt tells Kling to copy the look of `@Image1` on every frame. If the still failed, the run route deletes node 30 and swaps in a prompt that describes the same look without `@Image1` (`src/lib/reverse-3d-look.ts`).
+3. **The wait.** While Kling renders, the page un-renders the first frame into the still tile by tile, like a Cycles render running backwards (`src/components/tile-unrender.tsx`). Kling rarely reports progress, so the tiles also follow the time the job has taken and flip the rest when the video is ready.
+
+Tested on a 5 second, 4:3 clip of four people and a bicycle: every frame kept the still's look and the bicycle stayed a bicycle. Kling 4.0 Flash is about 38 credits per second of video, so a 10 second clip costs about 390 credits plus 9 for the still (about 200 for 5 seconds).
 
 ## The graph
 
-LoadVideo → Video Slice (first 10 s) → VideoFrameSample (uniform, the frames that make 16 fps) → GetVideoComponents → ImageScale (node 17, centre crop) → DepthAnythingV2 (node 40) → WanVaceToVideo (node 49: depth as `control_video`, the grey still as `reference_image`) → KSampler (4 steps, lcm, cfg 1, lightx2v LoRA, shift 8) → TrimVideoLatent (drops the reference frame) → VAEDecode → ImageDesaturate+ (node 33) → CreateVideo 16 fps → SaveVideo.
+LoadVideo → Video Slice (first 10 seconds) → GetVideoComponents → ResizeAndPadImage → CreateVideo (constant 24 fps, original audio) → Kling4EditVideoNode (with node 30's still) → SaveVideo. Browser MediaRecorder WebMs often have no duration and confuse LoadVideo into reporting 1 fps; re-wrapping the decoded frames at 24 fps keeps the frame count and satisfies Kling's 24 fps minimum without stitching (which OOMs).
 
-The run route fits the graph to each clip (`applyPlayblastShape`): the frame keeps the clip's shape with its longer side at 832 and both sides on 16-pixel blocks (1920×1080 becomes 832×464, 960×720 becomes 832×624), and the frame count is the clip's length at 16 fps: up to 10 s as 4n + 1, from 17 to 161 (161 for 10 s), longer clips every frame (480 for 30 s, in three passes). The server reads the size from the file (MP4/MOV sample size with the rotation matrix, WebM PixelWidth/PixelHeight) and the length from the container, capped by the length the browser sends.
+Kling 4.0 Edit requires both sides between 700 and 4553 pixels and a width/height ratio from 0.40 to 2.50. Node 17 runs on every clip. The server sets its canvas from the file: MP4/MOV sample size, swapped when the track matrix is 90° or 270° so it matches the frames LoadVideo rotates, and WebM PixelWidth/PixelHeight even when the Segment size is the 8-byte unknown length Chrome MediaRecorder writes. It scales uniformly until both sides are at least 700, keeps an already-legal frame as-is up to 1920×1080, and pads with black only when the ratio is outside 0.40–2.50 (smallest legal canvas, 700×1750 or 1750×700). Nothing is cropped or stretched. The long side stays at or under 1920 so a 10 second 24 fps batch does not grow toward Kling’s 4553px ceiling.
 
-Models the graph uses (all on Comfy Cloud): `wan2.1_vace_14B_fp16`, `Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32`, `umt5_xxl_fp16`, `wan_2.1_vae`, `depth_anything_v2_vitl.pth`, `qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_comfyui`, `qwen_2.5_vl_7b_fp8_scaled`, `qwen_image_vae`, and the comfyui_essentials nodes (`ImageDesaturate+`).
-
-Measured on Comfy Cloud (RTX Pro 6000): a 10 second clip at 832×464 took 112.5 GPU seconds for the video, about 32 credits at the measured 0.29 credits per GPU second. A 5 second clip is about 15 credits. The Kling graph cost about 400 credits for 10 seconds.
-
-`src/lib/reverse-3d-switch.ts` holds `REVERSE_3D_RENDERS_VIDEO`. While it is `false`, `POST /api/run/reverse-3d` answers 503 `video_off` before reading the upload, so no GPU time is spent. Mock runs stay open for local testing.
+`src/lib/reverse-3d-switch.ts` holds `REVERSE_3D_RENDERS_VIDEO`. While it is `false`, `POST /api/run/reverse-3d` answers 503 `video_off` before reading the upload, so no Kling credits are spent. Mock runs stay open for local testing.
 
 ## The old 3D blockout
 

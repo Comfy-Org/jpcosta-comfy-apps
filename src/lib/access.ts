@@ -4,10 +4,9 @@ import { AppError } from "@/lib/http";
 import { kvConfigured, kvCount, kvDelete, kvGet, kvSetIfAbsent } from "@/lib/kv";
 
 /**
- * Who may start a paid job on Unrender. Both run on Comfy Cloud (src/lib/unrender-cloud.ts).
- * - A visitor's own Comfy API key: the jobs run on their Comfy Cloud account and spend their credits.
- *   No limit on how many, clips up to 60 seconds.
- * - An email signed in with a code: one free video per email, up to 10 seconds, paid by the app's key.
+ * Who may start a paid job on Unrender.
+ * - A visitor's own Comfy API key: partner nodes (Nano Banana, Kling) bill that key, so there is no limit here.
+ * - An email signed in with a code: one free video per email, paid by the app's key.
  * The code and the session are signed tokens; the store only keeps which emails used their video and the counters.
  */
 
@@ -19,7 +18,6 @@ const SENDS_PER_HOUR = 4;
 /** Stills an email may draw before its one video (a retry after a bad clip). */
 const STILLS_PER_EMAIL = 3;
 export const VISITOR_KEY_FIELD = "comfyKey";
-export const VISITOR_KEY_HEADER = "x-comfy-key";
 
 export type Access = { kind: "key"; key: string } | { kind: "email"; email: string };
 
@@ -61,15 +59,7 @@ export function normalizeEmail(raw: unknown): string {
 
 /** A pasted Comfy API key, or null when the field is empty. It is never stored on the server. */
 export function readVisitorKey(form: FormData): string | null {
-  return checkVisitorKey(form.get(VISITOR_KEY_FIELD));
-}
-
-/** The same key, sent as a header when the browser polls a job or downloads its output. */
-export function readVisitorKeyHeader(request: Request): string | null {
-  return checkVisitorKey(request.headers.get(VISITOR_KEY_HEADER));
-}
-
-function checkVisitorKey(raw: unknown): string | null {
+  const raw = form.get(VISITOR_KEY_FIELD);
   const key = typeof raw === "string" ? raw.trim() : "";
   if (!key) return null;
   if (!/^[\x21-\x7e]{20,256}$/.test(key)) {

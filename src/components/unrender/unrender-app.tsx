@@ -6,7 +6,7 @@ import { downloadBlob } from "@/lib/composite";
 import { videoTypeRejectReason } from "@/lib/prepare-image";
 import { requestPlayblastLook } from "@/lib/scene-client";
 import { TERMINAL_STATUSES, type JobView } from "@/lib/types";
-import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_KEY_MAX_SECONDS, REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
+import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_MAX_SECONDS } from "@/lib/video-client";
 import { VideoSplit } from "@/components/reverse-3d-steps";
 import { PageUnrender } from "@/components/unrender/page-unrender";
 
@@ -20,8 +20,7 @@ type Stage = "idle" | "gate" | "reading" | "look" | "render" | "finishing" | "re
 
 type AccessInfo = { email: string | null; used: boolean; emailLogin: boolean; mock: boolean };
 
-/** `seconds`: the length the browser measured, at most 10; the server samples that much at 16 fps. */
-type Clip = { file: File; url: string; trimmed: boolean; seconds?: number };
+type Clip = { file: File; url: string; trimmed: boolean };
 
 type Result = { jobId: string; blob: Blob; url: string; compareBlob?: Blob; compareError?: string };
 
@@ -30,10 +29,8 @@ type Recovery = { jobId: string; outputId?: string; sig?: string };
 const RUN_ENDPOINT = "/api/run/reverse-3d";
 const KEY_STORAGE = "unrender:comfyKey";
 const KEYS_URL = "https://platform.comfy.org/profile/api-keys";
-/** About how long the video job takes per 10 seconds of clip (VACE renders 10 s in about two minutes, plus loading the models). */
-const TYPICAL_SECONDS = 150;
-/** Sent with job polls and downloads, so jobs on the visitor's own Comfy Cloud account can be read. */
-const KEY_HEADER = "x-comfy-key";
+/** About how long the video job takes, for the tiles while Kling reports no progress. */
+const TYPICAL_SECONDS = 240;
 const POLL_LIMIT_MS = 20 * 60 * 1000;
 /** The demo plays the whole un-render on the example clip with no job and no credits. */
 const DEMO = { clip: "/examples/plaza.mp4", frame: "/examples/plaza.jpg", still: "/examples/plaza-still.jpg", playblast: "/examples/plaza-playblast.mp4" };
@@ -90,10 +87,6 @@ function readStoredKey(): string | null {
   } catch {
     return null;
   }
-}
-
-function keyHeaders(key: string | null): Record<string, string> {
-  return key ? { [KEY_HEADER]: key } : {};
 }
 
 function storeKey(key: string | null) {
@@ -170,8 +163,6 @@ export function UnrenderApp() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<PageUnrender | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  /** The key that started the current job: its status and video live on that key's account. */
-  const runKeyRef = useRef<string | null>(null);
   const stepRef = useRef<ClientStep>("submit");
   const stageRef = useRef<Stage>("idle");
   stageRef.current = stage;
@@ -207,9 +198,8 @@ export function UnrenderApp() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // The job reports progress only per sampler step, so the tiles also follow the time the job has taken.
-  const typical = TYPICAL_SECONDS * Math.max(1, Math.ceil((clip?.seconds ?? REVERSE_3D_MAX_SECONDS) / REVERSE_3D_MAX_SECONDS - 0.01));
-  const estimate = 1 - Math.exp(-waited / (typical / 2.5));
+  // Kling rarely reports progress, so the tiles also follow the time the job has taken.
+  const estimate = 1 - Math.exp(-waited / (TYPICAL_SECONDS / 2.5));
   const share = Math.max(progress, estimate);
   const preparing = stage === "reading" || stage === "look";
   // The page around the shot does not wait for the still: it starts as soon as the clip comes in.
@@ -387,24 +377,16 @@ export function UnrenderApp() {
     setStage("reading");
     setNote("Checking the clip…");
     try {
-      const maxSeconds = visitorKey ? REVERSE_3D_KEY_MAX_SECONDS : REVERSE_3D_MAX_SECONDS;
-      const prepared = await prepareReverse3dUpload(file, maxSeconds);
+      const prepared = await prepareReverse3dUpload(file);
       if (controller.signal.aborted) return;
-      const ready: Clip = {
-        file: prepared.file,
-        url: URL.createObjectURL(prepared.file),
-        trimmed: prepared.trimmed,
-        seconds: prepared.duration,
-      };
+      const ready: Clip = { file: prepared.file, url: URL.createObjectURL(prepared.file), trimmed: prepared.trimmed };
       setClip(ready);
       setStage("look");
       setNote("Drawing the playblast look…");
       const drawn = await requestPlayblastLook(prepared.file, undefined, visitorKey);
       if (controller.signal.aborted) return;
-      // Without the still VACE has no mannequin to copy and renders a detailed sculpture: stop before paying for that.
-      if (!drawn.still) throw new Error(`Could not draw the playblast look: ${drawn.error ?? "the still job failed"}`);
       setLook({ frame: URL.createObjectURL(drawn.frame), still: drawn.still ? URL.createObjectURL(drawn.still) : null });
-      setNote(ready.trimmed ? `Using the first ${maxSeconds} seconds of this clip.` : null);
+      setNote(ready.trimmed ? `Using the first ${REVERSE_3D_MAX_SECONDS} seconds of this clip.` : null);
       await render(ready, drawn.still, visitorKey, controller);
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -432,10 +414,8 @@ export function UnrenderApp() {
     setWaited(0);
     const form = new FormData();
     form.append("video", ready.file, ready.file.name);
-    if (ready.seconds) form.append("seconds", ready.seconds.toFixed(3));
     if (still) form.append("reference", still, "reference.jpg");
     if (visitorKey) form.append("comfyKey", visitorKey);
-    runKeyRef.current = visitorKey;
     const response = await fetch(RUN_ENDPOINT, { method: "POST", body: form, signal: controller.signal });
     const payload = await readJson<{ jobId?: string }>(response);
     if (!response.ok || !payload?.jobId) throw errorOf(payload, "The render could not start.");
@@ -457,10 +437,7 @@ export function UnrenderApp() {
       }
       await sleep(job ? 2500 : 400, controller.signal);
       try {
-        const response = await fetch(`/api/jobs/${encodeURIComponent(target.jobId)}`, {
-          signal: controller.signal,
-          headers: keyHeaders(runKeyRef.current),
-        });
+        const response = await fetch(`/api/jobs/${encodeURIComponent(target.jobId)}`, { signal: controller.signal });
         if (!response.ok) throw errorOf(await readJson(response), "Could not read the render's status.");
         job = (await response.json()) as JobView;
         failures = 0;
@@ -487,7 +464,7 @@ export function UnrenderApp() {
     const url = `/api/outputs/${encodeURIComponent(target.outputId ?? "")}?sig=${encodeURIComponent(target.sig ?? "")}`;
     let read: Awaited<ReturnType<typeof fetchBlobRetrying>>;
     try {
-      read = await fetchBlobRetrying(url, { signal: controller.signal, headers: keyHeaders(runKeyRef.current) }, fetch);
+      read = await fetchBlobRetrying(url, { signal: controller.signal }, fetch);
     } catch (err) {
       if (!controller.signal.aborted) setRecovery(target);
       throw err;
@@ -524,12 +501,9 @@ export function UnrenderApp() {
       } else if (recovery) {
         setStage("render");
         await follow(recovery, clip, controller);
-      } else if (look?.still) {
-        const still = await fetch(look.still).then((response) => response.blob());
-        await render(clip, still, key, controller);
       } else {
-        // The still never came: start over from the clip, look first.
-        await start(clip.file, key);
+        const still = look?.still ? await fetch(look.still).then((response) => response.blob()) : null;
+        await render(clip, still, key, controller);
       }
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -665,8 +639,7 @@ export function UnrenderApp() {
           <div className="ur-copy">
             <h1 data-b="t">Turn any final shot back into a playblast</h1>
             <p className="ur-sub" data-b="t">
-              Drop a clip and we un-render it, all the way back to grey blocking. {REVERSE_3D_MAX_SECONDS} seconds free, up to{" "}
-              {REVERSE_3D_KEY_MAX_SECONDS} with your own Comfy key.
+              Drop a clip and we un-render it, all the way back to grey blocking. Up to {REVERSE_3D_MAX_SECONDS} seconds.
             </p>
             {stage === "gate" ? (
               <Gate
@@ -777,9 +750,7 @@ export function UnrenderApp() {
         <section className="ur-how" aria-label="How it works">
           <div>
             <b data-b="t">1 · Drop a finished shot</b>
-            <p data-b="t">
-              MP4, MOV or WebM. Any length: we use the first {REVERSE_3D_MAX_SECONDS} seconds, or {REVERSE_3D_KEY_MAX_SECONDS} with your key.
-            </p>
+            <p data-b="t">MP4, MOV or WebM. Any length, we use the first {REVERSE_3D_MAX_SECONDS} seconds.</p>
           </div>
           <div>
             <b data-b="t">2 · Watch it un-render</b>
@@ -1036,7 +1007,7 @@ function Gate({
           </form>
         )}
         <p className="ur-fine">
-          It stays in this browser. The render runs on your Comfy Cloud account, about 35 credits per 10 seconds of video.{" "}
+          It stays in this browser and bills your Comfy account, about 400 credits a video.{" "}
           <a href={KEYS_URL} target="_blank" rel="noopener noreferrer">
             Get a key
           </a>
