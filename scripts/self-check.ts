@@ -152,8 +152,8 @@ assert.deepEqual(
 );
 assert.equal(carveCatalog?.hasSeed, true);
 const reverseCatalog = buildCatalog().find((app) => app.id === "reverse-3d");
-assert.equal(reverseCatalog?.name, "Reverse 3D");
-assert.equal(reverseCatalog?.tagline, "Turn a final shot into a blocky playblast");
+assert.equal(reverseCatalog?.name, "Unrender");
+assert.equal(reverseCatalog?.tagline, "Turn any final shot back into a grey clay playblast");
 assert.equal(reverseCatalog?.kind, "reverse-3d");
 assert.equal(reverseCatalog?.icon, "cube");
 assert.equal(reverseCatalog?.output, "video");

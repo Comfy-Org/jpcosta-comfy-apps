@@ -1,28 +1,16 @@
-import { isMockJobId, isMockOutputId, parsePublicRouteId } from "@/lib/ids";
-
 /**
- * The only app this site serves.
- * A new app stays off the public surface until its id is added here.
- * There is no header, query, or env flag that turns the others back on.
+ * The studio serves every app in workflows/apps.config.json; the routes check that the app and its deployment exist.
+ * Unrender's old page paths land on the studio home.
  */
-export const PUBLIC_APP_IDS = ["reverse-3d"] as const;
 
-const PUBLIC_PAGE = "/unrender";
-/** The app's old page. Old links land on the new one. */
-const OLD_PAGE = "/reverse-3d";
-/** Example clips on the page, served from public/examples. */
-const EXAMPLES = /^\/examples\/[a-z0-9-]+\.(mp4|jpg|png|webp)$/;
-/** The tab icon (a spinning clay cube), served from public/brand. */
-const BRAND = /^\/brand\/[a-z0-9-]+\.(gif|png)$/;
+const HOME = "/";
+const OLD_PAGES = ["/unrender", "/reverse-3d"];
 
 export function isPublicApp(id: string): boolean {
-  return (PUBLIC_APP_IDS as readonly string[]).includes(id);
+  return /^[a-z0-9-]+$/.test(id);
 }
 
-export type PublicDecision =
-  | { action: "allow" }
-  | { action: "redirect"; location: typeof PUBLIC_PAGE }
-  | { action: "deny"; message: string };
+export type PublicDecision = { action: "allow" } | { action: "redirect"; location: typeof HOME };
 
 function normalizePath(pathname: string): string {
   const bare = pathname.split("?")[0]?.split("#")[0] ?? "/";
@@ -30,81 +18,6 @@ function normalizePath(pathname: string): string {
   return bare || "/";
 }
 
-function oneSegment(id: string): boolean {
-  return id.length > 0 && !id.includes("/") && !id.includes("\\") && !id.includes("..");
-}
-
-function isPublicJobId(id: string): boolean {
-  if (!oneSegment(id)) return false;
-  if (isMockJobId(id)) return true;
-  const routed = parsePublicRouteId(id);
-  return Boolean(routed && isPublicApp(routed.app));
-}
-
-function isPublicOutputId(id: string): boolean {
-  if (!oneSegment(id)) return false;
-  if (isMockOutputId(id)) return true;
-  const routed = parsePublicRouteId(id);
-  return Boolean(routed && isPublicApp(routed.app));
-}
-
-/** Whether this request may reach a page or route handler. Default is deny. */
-export function decidePublicRequest(method: string, pathname: string): PublicDecision {
-  const path = normalizePath(pathname);
-  const read = method === "GET" || method === "HEAD";
-
-  if (path === "/" || path === OLD_PAGE) return { action: "redirect", location: PUBLIC_PAGE };
-
-  if (EXAMPLES.test(path) || BRAND.test(path)) {
-    return read ? { action: "allow" } : { action: "deny", message: "Not found." };
-  }
-
-  if (path.startsWith("/_next/") || path === "/favicon.ico" || path === "/icon" || path === "/icon.svg") {
-    return read ? { action: "allow" } : { action: "deny", message: "Not found." };
-  }
-
-  if (path === PUBLIC_PAGE) {
-    return read ? { action: "allow" } : { action: "deny", message: "Not found." };
-  }
-
-  if (PUBLIC_APP_IDS.some((id) => path === `/api/run/${id}`)) {
-    return method === "POST" ? { action: "allow" } : { action: "deny", message: "Unknown app." };
-  }
-
-  if (path.startsWith("/api/run/")) {
-    return { action: "deny", message: "Unknown app." };
-  }
-
-  if (path === "/api/access") {
-    if (read || method === "DELETE") return { action: "allow" };
-    return { action: "deny", message: "Not found." };
-  }
-
-  if (path === "/api/access/google" || path === "/api/access/google/callback") {
-    return read ? { action: "allow" } : { action: "deny", message: "Not found." };
-  }
-
-  if (path === "/api/access/code" || path === "/api/access/verify") {
-    return method === "POST" ? { action: "allow" } : { action: "deny", message: "Not found." };
-  }
-
-  if (path === "/api/reverse-3d/subject") {
-    if (method === "POST" || read) return { action: "allow" };
-    return { action: "deny", message: "Not found." };
-  }
-
-  if (path.startsWith("/api/jobs/")) {
-    const id = path.slice("/api/jobs/".length);
-    if (read && isPublicJobId(id)) return { action: "allow" };
-    return { action: "deny", message: "Job not found." };
-  }
-
-  if (path.startsWith("/api/outputs/")) {
-    const id = path.slice("/api/outputs/".length);
-    if (read && isPublicOutputId(id)) return { action: "allow" };
-    return { action: "deny", message: "Output not found." };
-  }
-
-  if (path.startsWith("/api/")) return { action: "deny", message: "Not found." };
-  return { action: "deny", message: "Not found." };
+export function decidePublicRequest(_method: string, pathname: string): PublicDecision {
+  return OLD_PAGES.includes(normalizePath(pathname)) ? { action: "redirect", location: HOME } : { action: "allow" };
 }

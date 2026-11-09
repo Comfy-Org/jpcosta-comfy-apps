@@ -2,13 +2,9 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Unrender",
-  description: "Turn any final shot back into a grey clay playblast.",
-  // A spinning clay cube. The GIF spins on its own in Firefox; the page spins it in other browsers.
-  icons: {
-    icon: [{ url: "/brand/favicon.gif", type: "image/gif" }],
-    apple: [{ url: "/brand/apple-icon.png", sizes: "180x180" }],
-  },
+  title: "Comfy API Apps",
+  description:
+    "Sprite Generator, Virtual Try On, Hand Product Swap, Paparazzi Me, Background Removal, Open Product Swap, Open Unboxing, Pumpkin Carve, and Unrender on Comfy deployments.",
 };
 
 export const viewport: Viewport = {

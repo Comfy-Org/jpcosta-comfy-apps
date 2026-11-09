@@ -430,7 +430,7 @@ export function AppCard({ app, layout = "card" }: { app: CatalogApp; layout?: "c
     }
     if (app.kind === "carve") return "9:16 timelapse";
     if (app.kind === "reverse-3d") {
-      return "Blocking playblast";
+      return "Clay render";
     }
     if (app.kind === "paparazzi") {
       const name = controlValue(next, "celebrity").trim();

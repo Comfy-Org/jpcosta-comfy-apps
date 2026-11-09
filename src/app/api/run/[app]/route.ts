@@ -1,4 +1,3 @@
-import { claimFreeVideo, freeVideoUsed, releaseFreeVideo, requireAccess, type Access } from "@/lib/access";
 import { readPresetImage } from "@/lib/box-presets";
 import { getApp } from "@/lib/config";
 import { uploadAsset, submitJob } from "@/lib/comfy";
@@ -14,8 +13,6 @@ import { parseRunParams } from "@/lib/params";
 import { applyKlingFrame, readVideoPixelSize } from "@/lib/kling-frame";
 import { isPublicApp } from "@/lib/public-surface";
 import { dropKlingLook, klingApp } from "@/lib/reverse-3d-kling";
-import { applyPlayblastShape, dropLookReference } from "@/lib/reverse-3d-look";
-import { unrenderTarget } from "@/lib/unrender-cloud";
 import { REVERSE_3D_RENDERS_VIDEO } from "@/lib/reverse-3d-switch";
 import { durationOverCap, readContainerDurationSeconds } from "@/lib/video-duration";
 import { buildJobBody, filePathFor, redactJobBody, type UploadedAsset } from "@/lib/workflow";
@@ -31,32 +28,6 @@ type MediaPart = {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
-
-/**
- * How long the clip is, for the 16 fps frame count: the file's own duration when it can be read,
- * capped by the length the browser measured (it trims to the first 10 seconds).
- */
-function clipSeconds(video: Buffer, sent: FormDataEntryValue | null): number | null {
-  const fromFile = readContainerDurationSeconds(video);
-  const fromBrowser = typeof sent === "string" ? Number.parseFloat(sent) : Number.NaN;
-  const browser = Number.isFinite(fromBrowser) && fromBrowser > 0 ? fromBrowser : null;
-  if (fromFile !== null && fromFile > 0) return browser !== null ? Math.min(fromFile, browser) : fromFile;
-  return browser;
-}
-
-/** Takes the email's free video before the job goes out, and gives it back if the job could not start. */
-async function submitWithAccess(access: Access | null, submit: () => Promise<string>): Promise<string> {
-  if (access?.kind !== "email") return submit();
-  if (!(await claimFreeVideo(access.email))) {
-    throw new AppError(403, "free_used", "This email already made its free video. Use your own Comfy API key to make more.");
-  }
-  try {
-    return await submit();
-  } catch (error) {
-    await releaseFreeVideo(access.email).catch(() => {});
-    throw error;
-  }
-}
 
 export async function POST(request: Request, context: { params: Promise<{ app: string }> }) {
   try {
@@ -74,14 +45,6 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
       form = await request.formData();
     } catch {
       throw new AppError(400, "invalid_input", "Upload the image as form data.");
-    }
-    // Unrender: a visitor's own key pays for Kling, an email gets one free open-source video.
-    let access: Access | null = null;
-    if (appId === "reverse-3d") {
-      access = requireAccess(request, form);
-      if (access.kind === "email" && (await freeVideoUsed(access.email))) {
-        throw new AppError(403, "free_used", "This email already made its free video. Use your own Comfy API key to make more.");
-      }
     }
 
     const media: Record<string, MediaPart> = {};
@@ -164,17 +127,9 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
     if (!mock && !key) {
       throw new AppError(500, "missing_key", missingKeyMessage(appId));
     }
-    // Unrender: the visitor's own key runs Kling (partner nodes billed to that key) on the deployment;
-    // a free video (email) runs the open-source graph on Comfy Cloud with the app's key. Both use the first 10 seconds.
-    const kling = appId === "reverse-3d" && access?.kind === "key";
-    const runApp = kling ? klingApp(app) : app;
-    const target = mock
-      ? null
-      : appId === "reverse-3d"
-        ? kling
-          ? deploymentTarget(appId)
-          : unrenderTarget(null)
-        : deploymentTarget(appId);
+    // Unrender: the Nano Banana still (drawn first, sent as `reference`) and Kling 4.0 Flash on the reverse-3d deployment.
+    const runApp = appId === "reverse-3d" ? klingApp(app) : app;
+    const target = mock ? null : deploymentTarget(appId);
 
     const assets: Record<string, UploadedAsset> = {};
     const imageFiles: Record<string, Buffer> = {};
@@ -189,27 +144,19 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
     }
 
     const idempotencyKey = crypto.randomUUID();
-    const body = buildJobBody(runApp, assets, params, kling && access?.kind === "key" ? access.key : key);
+    const body = buildJobBody(runApp, assets, params, key);
     if (appId === "reverse-3d" && media.video) {
       const dims = readVideoPixelSize(media.video.bytes);
       if (!dims) throw new AppError(400, "invalid_input", "Could not read that video's dimensions.");
-      if (kling) {
-        applyKlingFrame(body.workflow, dims.width, dims.height);
-        if (!assets.reference) dropKlingLook(body.workflow);
-      } else {
-        applyPlayblastShape(body.workflow, dims.width, dims.height, clipSeconds(media.video.bytes, form.get("seconds")));
-        if (!assets.reference) dropLookReference(body.workflow);
-      }
+      applyKlingFrame(body.workflow, dims.width, dims.height);
+      if (!assets.reference) dropKlingLook(body.workflow);
     }
     let jobId: string;
     if (mock || !target) {
       const saved = await saveMockJob(app, appId, params, imageFiles);
       jobId = saved.id;
     } else {
-      jobId = publicRouteId(appId, await submitWithAccess(access, () => submitJob(target, body, idempotencyKey)));
-    }
-    if ((mock || !target) && access?.kind === "email" && !(await claimFreeVideo(access.email))) {
-      throw new AppError(403, "free_used", "This email already made its free video. Use your own Comfy API key to make more.");
+      jobId = publicRouteId(appId, await submitJob(target, body, idempotencyKey));
     }
 
     return Response.json({

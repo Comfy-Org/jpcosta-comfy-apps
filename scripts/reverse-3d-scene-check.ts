@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { unrenderJobTarget } from "../src/lib/unrender-cloud";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,7 +10,6 @@ import { POST as postSubject } from "../src/app/api/reverse-3d/subject/route";
 import { getApp } from "../src/lib/config";
 import { mapJob } from "../src/lib/comfy";
 import { blockFigureMesh, decodeGlb, encodeGlb, reduceMesh } from "../src/lib/mesh-reduce";
-import { decidePublicRequest, isPublicApp } from "../src/lib/public-surface";
 import { signAssetId, verifyAssetSignature } from "../src/lib/signing";
 import {
   buildBoxMesh,
@@ -576,11 +574,6 @@ async function main() {
   const cutoutId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const cutoutToken = cutoutAssetToken(cutoutId);
   assert.equal(verifyAssetSignature(cutoutToken, signAssetId(cutoutToken)), true);
-  assert.equal(isPublicApp("reverse-3d-cutout"), false);
-  assert.equal(decidePublicRequest("GET", `/api/outputs/${cutoutToken}`).action, "deny");
-  assert.equal(decidePublicRequest("GET", `/api/jobs/background-removal~${cutoutId}`).action, "deny");
-  assert.equal(decidePublicRequest("GET", "/api/reverse-3d/subject").action, "allow");
-  assert.equal(decidePublicRequest("POST", "/api/run/background-removal").action, "deny");
 
   assert.deepEqual(
     comboOptions(
@@ -934,158 +927,8 @@ async function main() {
   assert.equal(selectImageOutput([{ id: "a", name: "reverse-3d/still_00001_.png" }])?.id, "a");
   assert.equal(selectImageOutput([{ id: "a", name: "reply.txt" }]), null);
 
-  // Access: no key and no session is refused before anything is uploaded.
-  const anonymous = await postReverse(clip4, png, "clip.mp4", "video/mp4", {});
-  assert.equal(anonymous.status, 401, JSON.stringify(anonymous.payload));
-  const badKey = await postReverse(clip4, png, "clip.mp4", "video/mp4", { key: "short" });
-  assert.equal(badKey.status, 400);
-  // A visitor key renders with Kling on the deployment and bills the partner nodes to that key.
+  // The studio runs Unrender with the app's own key: Kling's partner nodes bill that key on the deployment.
   assert.equal((ok.payload.request as { extra_data?: { api_key_comfy_org?: string } } | undefined)?.extra_data?.api_key_comfy_org, "<redacted>");
-
-  const klingTarget = unrenderJobTarget(VISITOR_KEY);
-  assert.notEqual(klingTarget.baseUrl, "https://cloud.comfy.org");
-  const teamKey = process.env.COMFY_API_KEY_TEAM;
-  process.env.COMFY_API_KEY_TEAM = "team-key-for-the-check";
-  const freeTarget = unrenderJobTarget(null);
-  assert.deepEqual([freeTarget.baseUrl, freeTarget.key, freeTarget.visitorKey], ["https://cloud.comfy.org", "team-key-for-the-check", false]);
-  if (teamKey === undefined) delete process.env.COMFY_API_KEY_TEAM;
-  else process.env.COMFY_API_KEY_TEAM = teamKey;
-
-  // Email: a code (shown in mock mode), a session cookie, one free video, then refused.
-  const codeRoute = await import("../src/app/api/access/code/route");
-  const verifyRoute = await import("../src/app/api/access/verify/route");
-  const accessRoute = await import("../src/app/api/access/route");
-  const askCode = async (email: string) => {
-    const response = await codeRoute.POST(new Request("http://localhost/api/access/code", { method: "POST", body: JSON.stringify({ email }) }));
-    return { status: response.status, body: (await response.json()) as { challenge?: string; devCode?: string; error?: { code?: string } } };
-  };
-  assert.equal((await askCode("not an email")).status, 400);
-  const asked = await askCode("Someone@Example.com ");
-  assert.equal(asked.status, 200);
-  assert.match(asked.body.devCode ?? "", /^\d{6}$/);
-  const wrongDigit = asked.body.devCode === "000000" ? "111111" : "000000";
-  const wrong = await verifyRoute.POST(new Request("http://localhost/api/access/verify", { method: "POST", body: JSON.stringify({ challenge: asked.body.challenge, code: wrongDigit }) }));
-  assert.equal(wrong.status, 400);
-  const verified = await verifyRoute.POST(new Request("http://localhost/api/access/verify", { method: "POST", body: JSON.stringify({ challenge: asked.body.challenge, code: asked.body.devCode }) }));
-  assert.equal(verified.status, 200);
-  const setCookie = verified.headers.get("set-cookie") ?? "";
-  assert.match(setCookie, /^unrender_session=[^;]+; Path=\/; HttpOnly; SameSite=Lax/);
-  const cookie = setCookie.split(";")[0];
-  const me = (await (await accessRoute.GET(new Request("http://localhost/api/access", { headers: { cookie } }))).json()) as { email?: string; used?: boolean };
-  assert.deepEqual([me.email, me.used], ["someone@example.com", false]);
-  const tampered = cookie.slice(0, -3) + (cookie.endsWith("abc") ? "xyz" : "abc");
-  assert.equal((await postReverse(clip4, png, "clip.mp4", "video/mp4", { cookie: tampered })).status, 401);
-
-  // Without a key, every run is the free open source one on Comfy Cloud: Qwen still, then Wan VACE, up to 10 seconds.
-  const freeCookie = async (email: string) => {
-    const code = await askCode(email);
-    assert.equal(code.status, 200);
-    const response = await verifyRoute.POST(
-      new Request("http://localhost/api/access/verify", { method: "POST", body: JSON.stringify({ challenge: code.body.challenge, code: code.body.devCode }) }),
-    );
-    assert.equal(response.status, 200);
-    return (response.headers.get("set-cookie") ?? "").split(";")[0];
-  };
-  const asFree = async (video: Buffer, reference: Buffer | null, email: string, name = "clip.mp4", type = "video/mp4") =>
-    postReverse(video, reference, name, type, { cookie: await freeCookie(email) });
-
-  // Without the grey still, VACE renders from the depth pass alone: no node 30-32 and no reference image.
-  const freeBare = await asFree(clip4, null, "bare@example.com");
-  assert.equal(freeBare.status, 200, JSON.stringify(freeBare.payload.error ?? freeBare.payload));
-  const freeVace = freeBare.payload.request?.workflow;
-  assert.ok(freeVace);
-  assert.equal(freeVace["30"], undefined);
-  assert.equal(freeVace["31"], undefined);
-  assert.equal(freeVace["32"], undefined);
-  assert.equal(freeVace["49"]?.class_type, "WanVaceToVideo");
-  assert.equal(freeVace["49"]?.inputs.reference_image, undefined);
-  assert.deepEqual(freeVace["49"]?.inputs.control_video, ["40", 0]);
-  // A 4 second 160x90 clip: 16 fps makes 65 frames (4n + 1), at 832x464 (16:9 on 16-pixel blocks).
-  assert.equal(freeVace["12"]?.inputs.num_frames, 65);
-  assert.equal(freeVace["49"]?.inputs.length, 65);
-  assert.equal(freeVace["49"]?.inputs.width, 832);
-  assert.equal(freeVace["49"]?.inputs.height, 464);
-  assert.equal(freeVace["17"]?.inputs.width, 832);
-  assert.equal(freeVace["17"]?.inputs.height, 464);
-  assert.equal(freeVace["40"]?.inputs.resolution, 464);
-  assert.equal(JSON.stringify(freeVace).includes("Kling"), false);
-  // The free run uses the team key on Comfy Cloud, so nothing bills a visitor key.
-  assert.equal((freeBare.payload.request as { extra_data?: unknown } | undefined)?.extra_data, undefined);
-
-  // A long webm is accepted too and kept to its first 10 seconds.
-  const freeWebm = await asFree(webm12, null, "webm@example.com", "clip.webm", "video/webm");
-  assert.equal(freeWebm.status, 200, JSON.stringify(freeWebm.payload.error ?? freeWebm.payload));
-  assert.equal(freeWebm.payload.request?.workflow?.["11"]?.inputs.duration, 10);
-
-  // With the still, it is node 30: its colour comes out (31), it is sized to the video (32) and VACE copies its look.
-  const freeOk = await asFree(clip4, png, "still@example.com");
-  assert.equal(freeOk.status, 200, JSON.stringify(freeOk.payload.error ?? freeOk.payload));
-  const oss = freeOk.payload.request?.workflow;
-  assert.ok(oss);
-  assert.equal(oss["11"]?.class_type, "Video Slice");
-  assert.equal(oss["11"]?.inputs.duration, 4);
-  assert.equal(oss["12"]?.class_type, "VideoFrameSample");
-  assert.deepEqual(oss["12"]?.inputs.video, ["11", 0]);
-  assert.deepEqual(oss["15"]?.inputs.video, ["12", 0]);
-  assert.equal(oss["30"]?.class_type, "LoadImage");
-  assert.equal((oss["30"]?.inputs.image as { info?: { file_path?: string } })?.info?.file_path, "reference.png");
-  assert.equal(oss["31"]?.class_type, "ImageDesaturate+");
-  assert.deepEqual(oss["32"]?.inputs.image, ["31", 0]);
-  assert.equal(oss["32"]?.inputs.width, 832);
-  assert.deepEqual(oss["49"]?.inputs.reference_image, ["32", 0]);
-  assert.equal(oss["106"]?.inputs.unet_name, "wan2.1_vace_14B_fp16.safetensors");
-  assert.equal(oss["3"]?.inputs.steps, 4);
-  // The colour comes out of the playblast too, before it is packed at 16 fps.
-  assert.equal(oss["33"]?.class_type, "ImageDesaturate+");
-  assert.deepEqual(oss["33"]?.inputs.image, ["8", 0]);
-  assert.deepEqual(oss["16"]?.inputs.images, ["33", 0]);
-  assert.equal(oss["16"]?.inputs.fps, 16);
-  assert.deepEqual(oss["21"]?.inputs.video, ["16", 0]);
-
-  // The free still: one Qwen Image Edit job on the first frame, with its colour taken out.
-  const freeStillForm = new FormData();
-  freeStillForm.set("step", "still");
-  freeStillForm.append("frame", new File([new Uint8Array(png)], "frame.jpg", { type: "image/jpeg" }));
-  const freeStillResponse = await postSubject(
-    new Request("http://localhost/api/reverse-3d/subject", { method: "POST", body: freeStillForm, headers: { cookie: await freeCookie("qwen@example.com") } }),
-  );
-  const freeStill = (await freeStillResponse.json()) as {
-    still?: Record<string, { class_type?: string; inputs?: Record<string, unknown> }>;
-    error?: { message?: string };
-  };
-  assert.equal(freeStillResponse.status, 200, JSON.stringify(freeStill.error));
-  assert.equal(freeStill.still?.["10"]?.class_type, "UNETLoader");
-  assert.match(String(freeStill.still?.["10"]?.inputs?.unet_name), /^qwen_image_edit_2511/);
-  assert.equal(freeStill.still?.["14"]?.class_type, "TextEncodeQwenImageEditPlus");
-  assert.deepEqual(freeStill.still?.["13"]?.inputs?.image, ["1", 0]);
-  // Comfy Cloud requires every widget: a missing resolution_steps failed validation there.
-  assert.equal(freeStill.still?.["13"]?.inputs?.resolution_steps, 1);
-  assert.match(String(freeStill.still?.["14"]?.inputs?.prompt), /never turn an object into a person/);
-  assert.match(String(freeStill.still?.["14"]?.inputs?.prompt), /nothing keeps its original color/);
-  assert.equal(freeStill.still?.["18"]?.inputs?.steps, 4);
-  assert.equal(freeStill.still?.["2"]?.class_type, "ImageDesaturate+");
-  assert.deepEqual(freeStill.still?.["2"]?.inputs?.image, ["19", 0]);
-  assert.equal(freeStill.still?.["3"]?.class_type, "SaveImage");
-  assert.deepEqual(freeStill.still?.["3"]?.inputs?.images, ["2", 0]);
-  assert.equal(JSON.stringify(freeStill.still).includes("Nano Banana"), false);
-
-  // The free video is the first 10 seconds of a 12 second clip: one VACE pass of 161 frames.
-  const free = await postReverse(clip12, png, "clip.mp4", "video/mp4", { cookie });
-  assert.equal(free.status, 200, JSON.stringify(free.payload));
-  assert.equal(free.payload.request?.workflow?.["11"]?.inputs.duration, 10);
-  assert.equal(free.payload.request?.workflow?.["12"]?.inputs.num_frames, 161);
-  assert.equal(free.payload.request?.workflow?.["49"]?.inputs.length, 161);
-  assert.equal(free.payload.request?.workflow?.["1001"], undefined);
-  const again = await postReverse(clip4, png, "clip.mp4", "video/mp4", { cookie });
-  assert.equal(again.status, 403);
-  const usedStill = new FormData();
-  usedStill.append("frame", new File([new Uint8Array(png)], "frame.jpg", { type: "image/jpeg" }));
-  usedStill.set("step", "still");
-  const usedStillResponse = await postSubject(new Request("http://localhost/api/reverse-3d/subject", { method: "POST", body: usedStill, headers: { cookie } }));
-  assert.equal(usedStillResponse.status, 403);
-  assert.equal((await askCode("someone@example.com")).status, 409, "a used email gets no new code");
-  // The same email with its own key still works.
-  assert.equal((await postReverse(clip4, png)).status, 200);
 
   const subjectForm = new FormData();
   subjectForm.set("comfyKey", VISITOR_KEY);
