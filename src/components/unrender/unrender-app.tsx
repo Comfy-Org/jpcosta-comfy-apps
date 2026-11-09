@@ -40,7 +40,14 @@ const STILL_CREDITS = 9;
 const KEY_HEADER = "x-comfy-key";
 const POLL_LIMIT_MS = 20 * 60 * 1000;
 /** The demo plays the whole un-render on the example clip with no job and no credits. */
-const DEMO = { clip: "/examples/plaza.mp4", frame: "/examples/plaza.jpg", still: "/examples/plaza-still.jpg", playblast: "/examples/plaza-playblast.mp4" };
+const DEMO = {
+  clip: "/examples/avengers.mp4",
+  frame: "/examples/avengers.jpg",
+  still: "/examples/avengers-still.jpg",
+  playblast: "/examples/avengers-playblast.mp4",
+};
+/** The example clip is 16:9. */
+const EXAMPLE_ASPECT = 16 / 9;
 /** The demo's still "arrives" after this, like the real one, so the page around the shot goes first. */
 const DEMO_LOOK_MS = 5000;
 /** While the clip is read and its still is drawn, the page around the shot creeps up to this share of its tiles. */
@@ -165,12 +172,10 @@ export function UnrenderApp() {
   const [renderedBack, setRenderedBack] = useState(false);
   const [hot, setHot] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  /** The shot's shape, so the frame fits the clip with no bars. The example is 4:3. */
-  const [aspect, setAspect] = useState(4 / 3);
+  /** The shot's shape, so the frame fits the clip with no bars. The example is 16:9. */
+  const [aspect, setAspect] = useState(EXAMPLE_ASPECT);
   /** Seconds since the clip came in, while it is read and its still is drawn. */
   const [prepWaited, setPrepWaited] = useState(0);
-  /** A colour option for the headline and the main button (?theme=ink|cycles|lime|clay|teal), while JP picks one. */
-  const [theme, setTheme] = useState<string | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -205,8 +210,6 @@ export function UnrenderApp() {
     // The stored key is read after hydration, so the server and the first client render agree.
     void Promise.resolve().then(() => setKey(readStoredKey()));
     void refreshAccess();
-    const option = new URLSearchParams(window.location.search).get("theme");
-    if (option && /^[a-z]{2,12}$/.test(option)) void Promise.resolve().then(() => setTheme(option));
     // /unrender?demo plays the effect on the example straight away.
     if (new URLSearchParams(window.location.search).has("demo")) void Promise.resolve().then(() => demoRef.current());
     return () => {
@@ -612,7 +615,7 @@ export function UnrenderApp() {
     abortRef.current = controller;
     try {
       const clipBlob = await fetch(DEMO.clip).then((response) => response.blob());
-      const file = new File([clipBlob], "plaza.mp4", { type: "video/mp4" });
+      const file = new File([clipBlob], "avengers.mp4", { type: "video/mp4" });
       const ready: Clip = { file, url: URL.createObjectURL(file), trimmed: false };
       setClip(ready);
       setStage("look");
@@ -683,7 +686,7 @@ export function UnrenderApp() {
             : null;
 
   return (
-    <div className={`ur${covered ? " grey" : ""}${hot ? " hot" : ""}`} ref={rootRef} data-stage={stage} data-theme={theme ?? undefined}>
+    <div className={`ur${covered ? " grey" : ""}${hot ? " hot" : ""}`} ref={rootRef} data-stage={stage}>
       <div className="ur-page" aria-hidden={covered ? true : undefined}>
         <nav className="ur-nav">
           <a className="ur-logo" href="/unrender" data-b>
@@ -785,7 +788,7 @@ export function UnrenderApp() {
           <figure
             className={`ur-shot${showResult ? " ur-lift reveal" : ""}`}
             data-b={showResult ? undefined : "img"}
-            style={{ "--ar": shotUrl ? aspect : 4 / 3 } as CSSProperties}
+            style={{ "--ar": shotUrl ? aspect : EXAMPLE_ASPECT } as CSSProperties}
           >
             {showResult ? (
               <VideoSplit original={clip?.url ?? result.url} playblast={result.url} position={split} onChange={setSplit} />
@@ -806,8 +809,8 @@ export function UnrenderApp() {
             ) : (
               <>
                 <VideoSplit
-                  original="/examples/plaza.mp4"
-                  playblast="/examples/plaza-playblast.mp4"
+                  original={DEMO.clip}
+                  playblast={DEMO.playblast}
                   position={exampleSplit}
                   onChange={setExampleSplit}
                 />
@@ -842,7 +845,7 @@ export function UnrenderApp() {
             </a>
           </p>
           <a className="ur-powered" href="https://comfy.org/" target="_blank" rel="noopener noreferrer" data-b>
-            <span>Powered by</span>
+            <span>Running on</span>
             <ComfyLogo className="ur-comfy" />
           </a>
         </footer>

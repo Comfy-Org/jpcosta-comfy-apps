@@ -23,8 +23,8 @@ for (const id of listAppIds()) {
 assert.deepEqual(decidePublicRequest("GET", "/"), { action: "redirect", location: "/unrender" });
 assert.deepEqual(decidePublicRequest("GET", "/reverse-3d"), { action: "redirect", location: "/unrender" });
 assert.equal(decidePublicRequest("GET", "/unrender").action, "allow");
-assert.equal(decidePublicRequest("GET", "/examples/plaza.mp4").action, "allow");
-assert.equal(decidePublicRequest("POST", "/examples/plaza.mp4").action, "deny");
+assert.equal(decidePublicRequest("GET", "/examples/avengers.mp4").action, "allow");
+assert.equal(decidePublicRequest("POST", "/examples/avengers.mp4").action, "deny");
 assert.equal(decidePublicRequest("GET", "/examples/../secret.mp4").action, "deny");
 assert.equal(decidePublicRequest("GET", "/presets/x.png").action, "deny");
 assert.deepEqual(decidePublicRequest("GET", "/unrender/"), { action: "allow" });
