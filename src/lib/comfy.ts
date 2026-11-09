@@ -48,7 +48,7 @@ function rejectedKeyMessage(slug: string): string {
 }
 
 async function comfyFetch(target: DeploymentTarget, pathname: string, init: RequestInit, timeoutMs: number): Promise<Response> {
-  const key = apiKey(target.slug);
+  const key = target.key ?? apiKey(target.slug);
   if (!key) throw new AppError(500, "missing_key", missingKeyMessage(target.slug));
   try {
     return await fetch(`${target.baseUrl}${pathname}`, {
@@ -90,6 +90,9 @@ async function throwEnvelope(target: DeploymentTarget, res: Response): Promise<n
     throw new AppError(status, code === "deployment_stopped" ? code : "deployment_not_ready", lifecycle);
   }
   if (code === "unauthorized" || res.status === 401) {
+    if (target.visitorKey) {
+      throw new AppError(401, "key_rejected", "Comfy Cloud did not accept your API key. Copy it again from your Comfy account.");
+    }
     throw new AppError(401, "unauthorized", rejectedKeyMessage(target.slug));
   }
 

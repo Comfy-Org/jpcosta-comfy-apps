@@ -1,4 +1,5 @@
-import { allowStill, requireAccess } from "@/lib/access";
+import { unrenderJobTarget } from "@/lib/unrender-cloud";
+import { allowStill, readVisitorKeyHeader, requireAccess } from "@/lib/access";
 import { fetchAssetUrl, fetchDeploymentJson, fetchJob, submitJob, uploadAsset } from "@/lib/comfy";
 import { deploymentTarget, type DeploymentTarget } from "@/lib/deployments";
 import { apiKey, isMockMode, missingKeyMessage } from "@/lib/env";
@@ -14,6 +15,7 @@ import {
   buildHunyuanWorkflow,
   buildMarkWorkflow,
   buildPickWorkflow,
+  buildKlingStillWorkflow,
   buildStillWorkflow,
   comboOptions,
   cutoutAssetToken,
@@ -172,7 +174,7 @@ export async function GET(request: Request) {
       throw new AppError(404, "not_found", "Output not found.");
     }
     if (isMockMode()) throw new AppError(404, "not_found", "Output not found.");
-    const target = deploymentTarget("reverse-3d");
+    const target = unrenderJobTarget(readVisitorKeyHeader(request));
     const signed = await fetchAssetUrl(target, output.includes("~") ? output.slice(output.indexOf("~") + 1) : output);
     const upstream = await fetch(signed, { redirect: "follow", signal: AbortSignal.timeout(60_000) });
     if (!upstream.ok) throw new AppError(502, "upstream_error", "Could not download the 3D model.");
@@ -221,10 +223,12 @@ export async function POST(request: Request) {
     const times = numbers(form.get("times"));
     const mock = isMockMode();
     if (!mock && !apiKey("reverse-3d")) throw new AppError(500, "missing_key", missingKeyMessage("reverse-3d"));
-    // Every step here is a paid partner job: a visitor key pays for itself, an email gets a few stills.
+    // Every step here is a paid job: a visitor key pays for itself, an email gets a few stills.
     const access = requireAccess(request, form);
     if (access.kind === "email" && step === "still") await allowStill(access.email);
     const key = access.kind === "key" ? access.key : apiKey("reverse-3d");
+    // A visitor's key runs on the deployment with partner nodes billed to it; a free still runs open source on Comfy Cloud.
+    const visitorKey = access.kind === "key" ? access.key : null;
 
     if (step === "pick") {
       const workflow = buildPickWorkflow(files.length);
@@ -240,7 +244,7 @@ export async function POST(request: Request) {
           pick: workflow,
         });
       }
-      const target = deploymentTarget("reverse-3d");
+      const target = unrenderJobTarget(visitorKey);
       // Upload the frames side by side: this is the wait before the 3D toy can start.
       await Promise.all(
         files.map(async (file, index) => {
@@ -257,13 +261,15 @@ export async function POST(request: Request) {
     // The playblast look: the first frame redrawn as a grey blocking pass. Its image is the video's look reference.
     if (step === "still") {
       if (files.length !== 1) throw new AppError(400, "invalid_input", "Upload the first frame once.");
-      const workflow = buildStillWorkflow();
+      // Own key: Nano Banana (partner node, billed to that key) for the Kling video. Free: Qwen Image Edit for VACE.
+      const workflow = visitorKey ? buildKlingStillWorkflow() : buildStillWorkflow();
       if (mock) return Response.json({ mock: true, step: "still", still: workflow });
-      const target = deploymentTarget("reverse-3d");
+      const target = unrenderJobTarget(visitorKey);
       const png = await prepareImage(files[0], FRAME_SIDE);
       const id = await uploadAsset(target, png, "frame.png", "image/png");
       wireImage(workflow, "1", id, "frame.png");
-      const jobId = await submitJob(target, { workflow, extra_data: { api_key_comfy_org: key ?? "" } }, crypto.randomUUID());
+      const body = visitorKey ? { workflow, extra_data: { api_key_comfy_org: visitorKey } } : { workflow };
+      const jobId = await submitJob(target, body, crypto.randomUUID());
       return Response.json({ step: "still", jobId: publicRouteId("reverse-3d", jobId) });
     }
 
@@ -278,7 +284,7 @@ export async function POST(request: Request) {
       const boxes = closeUpBoxes(form.get("boxes"), crops.length);
       const workflow = buildMarkWorkflow(kinds, boxes);
       if (mock) return Response.json({ mock: true, step: "mark", reply: MOCK_MARK_REPLY, mark: workflow });
-      const target = deploymentTarget("reverse-3d");
+      const target = unrenderJobTarget(visitorKey);
       const uploads = [
         { file: files[0], side: FRAME_SIDE, node: "1", filePath: "frame.png" },
         ...crops.map((file, index) => ({ file, side: CLOSE_UP_SIDE, node: String(index + 2), filePath: `subject_${index + 1}.png` })),
@@ -311,7 +317,7 @@ export async function POST(request: Request) {
       if (!verifyAssetSignature(token, signature)) throw new AppError(403, "forbidden", "That cut-out link is not valid.");
       const cutoutBytes = await downloadAsset(deploymentTarget("background-removal"), cutout);
       const hunyuan = buildHunyuanWorkflow();
-      const meshTarget = deploymentTarget("reverse-3d");
+      const meshTarget = unrenderJobTarget(visitorKey);
       const subjectAsset = await uploadAsset(meshTarget, cutoutBytes, "subject.png", "image/png");
       wireImage(hunyuan, "1", subjectAsset, "subject.png");
       const jobId = await submitJob(
@@ -327,7 +333,7 @@ export async function POST(request: Request) {
     // Hunyuan3D separates the subject itself; the cut-out only makes it cleaner.
     const uncut = async () => {
       const hunyuan = buildHunyuanWorkflow();
-      const meshTarget = deploymentTarget("reverse-3d");
+      const meshTarget = unrenderJobTarget(visitorKey);
       const subjectAsset = await uploadAsset(meshTarget, png, "subject.png", "image/png");
       wireImage(hunyuan, "1", subjectAsset, "subject.png");
       const meshJob = await submitJob(meshTarget, { workflow: hunyuan, extra_data: { api_key_comfy_org: key ?? "" } }, crypto.randomUUID());

@@ -16,11 +16,12 @@ import { PageUnrender } from "@/components/unrender/page-unrender";
  * Access: the visitor's own Comfy API key (kept in this browser), or one free video per email signed in with a code.
  */
 
-type Stage = "idle" | "gate" | "reading" | "look" | "render" | "finishing" | "result" | "error";
+type Stage = "idle" | "gate" | "confirm" | "reading" | "look" | "render" | "finishing" | "result" | "error";
 
 type AccessInfo = { email: string | null; used: boolean; emailLogin: boolean; mock: boolean };
 
-type Clip = { file: File; url: string; trimmed: boolean };
+/** `seconds`: the length the browser measured, at most 10; the server samples that much at 16 fps. */
+type Clip = { file: File; url: string; trimmed: boolean; seconds?: number };
 
 type Result = { jobId: string; blob: Blob; url: string; compareBlob?: Blob; compareError?: string };
 
@@ -29,8 +30,13 @@ type Recovery = { jobId: string; outputId?: string; sig?: string };
 const RUN_ENDPOINT = "/api/run/reverse-3d";
 const KEY_STORAGE = "unrender:comfyKey";
 const KEYS_URL = "https://platform.comfy.org/profile/api-keys";
-/** About how long the video job takes, for the tiles while Kling reports no progress. */
-const TYPICAL_SECONDS = 240;
+/** About how long the video job takes: Kling (own key) about four minutes, open-source VACE (free) about two and a half. */
+const TYPICAL_SECONDS = { kling: 240, free: 150 };
+/** Kling 4.0 Flash Edit bills about 40 to 50 credits per second of video; the Nano Banana still about 9. */
+const KLING_CREDITS_PER_SECOND = 50;
+const STILL_CREDITS = 9;
+/** Sent with job polls and downloads when the run used the visitor's key: those jobs live on the Kling deployment. */
+const KEY_HEADER = "x-comfy-key";
 const POLL_LIMIT_MS = 20 * 60 * 1000;
 /** The demo plays the whole un-render on the example clip with no job and no credits. */
 const DEMO = { clip: "/examples/plaza.mp4", frame: "/examples/plaza.jpg", still: "/examples/plaza-still.jpg", playblast: "/examples/plaza-playblast.mp4" };
@@ -87,6 +93,10 @@ function readStoredKey(): string | null {
   } catch {
     return null;
   }
+}
+
+function keyHeaders(key: string | null): Record<string, string> {
+  return key ? { [KEY_HEADER]: key } : {};
 }
 
 function storeKey(key: string | null) {
@@ -163,6 +173,11 @@ export function UnrenderApp() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<PageUnrender | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** The key that started the current job: its status and video live on that key's account. */
+  const runKeyRef = useRef<string | null>(null);
+  /** Answers the spend confirmation: true renders with the visitor's key, false stops before anything is paid. */
+  const confirmRef = useRef<((yes: boolean) => void) | null>(null);
+  const [confirmSeconds, setConfirmSeconds] = useState(REVERSE_3D_MAX_SECONDS);
   const stepRef = useRef<ClientStep>("submit");
   const stageRef = useRef<Stage>("idle");
   stageRef.current = stage;
@@ -189,7 +204,10 @@ export function UnrenderApp() {
     void refreshAccess();
     // /unrender?demo plays the effect on the example straight away.
     if (new URLSearchParams(window.location.search).has("demo")) void Promise.resolve().then(() => demoRef.current());
-    return () => abortRef.current?.abort();
+    return () => {
+      abortRef.current?.abort();
+      confirmRef.current?.(false);
+    };
   }, []);
 
   useEffect(() => {
@@ -198,8 +216,9 @@ export function UnrenderApp() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  // Kling rarely reports progress, so the tiles also follow the time the job has taken.
-  const estimate = 1 - Math.exp(-waited / (TYPICAL_SECONDS / 2.5));
+  // The job reports progress only per sampler step, so the tiles also follow the time the job has taken.
+  const typical = key ? TYPICAL_SECONDS.kling : TYPICAL_SECONDS.free;
+  const estimate = 1 - Math.exp(-waited / (typical / 2.5));
   const share = Math.max(progress, estimate);
   const preparing = stage === "reading" || stage === "look";
   // The page around the shot does not wait for the still: it starts as soon as the clip comes in.
@@ -368,23 +387,53 @@ export function UnrenderApp() {
   const takeFileRef = useRef(takeFile);
   takeFileRef.current = takeFile;
 
+  function confirmSpend(seconds: number): Promise<boolean> {
+    confirmRef.current?.(false);
+    return new Promise((resolve) => {
+      confirmRef.current = (yes) => {
+        confirmRef.current = null;
+        resolve(yes);
+      };
+      setConfirmSeconds(seconds);
+      setStage("confirm");
+    });
+  }
+
   async function start(file: File, visitorKey: string | null) {
     const controller = new AbortController();
     abortRef.current?.abort();
+    confirmRef.current?.(false);
     abortRef.current = controller;
     setPending(null);
     setError(null);
     setStage("reading");
     setNote("Checking the clip…");
     try {
-      const prepared = await prepareReverse3dUpload(file);
+      const prepared = await prepareReverse3dUpload(file, REVERSE_3D_MAX_SECONDS);
       if (controller.signal.aborted) return;
-      const ready: Clip = { file: prepared.file, url: URL.createObjectURL(prepared.file), trimmed: prepared.trimmed };
+      const ready: Clip = {
+        file: prepared.file,
+        url: URL.createObjectURL(prepared.file),
+        trimmed: prepared.trimmed,
+        seconds: prepared.duration,
+      };
       setClip(ready);
+      // The visitor's key pays for Kling: say what it will cost and wait for a yes before any paid job.
+      if (visitorKey && !(await confirmSpend(ready.seconds ?? REVERSE_3D_MAX_SECONDS))) {
+        if (!controller.signal.aborted) {
+          setNote(null);
+          setStage("idle");
+        }
+        return;
+      }
+      if (controller.signal.aborted) return;
       setStage("look");
       setNote("Drawing the playblast look…");
       const drawn = await requestPlayblastLook(prepared.file, undefined, visitorKey);
       if (controller.signal.aborted) return;
+      // Without the still VACE has no mannequin to copy and renders a detailed sculpture: stop before that.
+      // Kling still follows its prompt without it, as before.
+      if (!drawn.still && !visitorKey) throw new Error(`Could not draw the playblast look: ${drawn.error ?? "the still job failed"}`);
       setLook({ frame: URL.createObjectURL(drawn.frame), still: drawn.still ? URL.createObjectURL(drawn.still) : null });
       setNote(ready.trimmed ? `Using the first ${REVERSE_3D_MAX_SECONDS} seconds of this clip.` : null);
       await render(ready, drawn.still, visitorKey, controller);
@@ -414,8 +463,10 @@ export function UnrenderApp() {
     setWaited(0);
     const form = new FormData();
     form.append("video", ready.file, ready.file.name);
+    if (ready.seconds) form.append("seconds", ready.seconds.toFixed(3));
     if (still) form.append("reference", still, "reference.jpg");
     if (visitorKey) form.append("comfyKey", visitorKey);
+    runKeyRef.current = visitorKey;
     const response = await fetch(RUN_ENDPOINT, { method: "POST", body: form, signal: controller.signal });
     const payload = await readJson<{ jobId?: string }>(response);
     if (!response.ok || !payload?.jobId) throw errorOf(payload, "The render could not start.");
@@ -437,7 +488,10 @@ export function UnrenderApp() {
       }
       await sleep(job ? 2500 : 400, controller.signal);
       try {
-        const response = await fetch(`/api/jobs/${encodeURIComponent(target.jobId)}`, { signal: controller.signal });
+        const response = await fetch(`/api/jobs/${encodeURIComponent(target.jobId)}`, {
+          signal: controller.signal,
+          headers: keyHeaders(runKeyRef.current),
+        });
         if (!response.ok) throw errorOf(await readJson(response), "Could not read the render's status.");
         job = (await response.json()) as JobView;
         failures = 0;
@@ -464,7 +518,7 @@ export function UnrenderApp() {
     const url = `/api/outputs/${encodeURIComponent(target.outputId ?? "")}?sig=${encodeURIComponent(target.sig ?? "")}`;
     let read: Awaited<ReturnType<typeof fetchBlobRetrying>>;
     try {
-      read = await fetchBlobRetrying(url, { signal: controller.signal }, fetch);
+      read = await fetchBlobRetrying(url, { signal: controller.signal, headers: keyHeaders(runKeyRef.current) }, fetch);
     } catch (err) {
       if (!controller.signal.aborted) setRecovery(target);
       throw err;
@@ -501,9 +555,18 @@ export function UnrenderApp() {
       } else if (recovery) {
         setStage("render");
         await follow(recovery, clip, controller);
-      } else {
-        const still = look?.still ? await fetch(look.still).then((response) => response.blob()) : null;
+      } else if (look?.still) {
+        // A new Kling job is a new charge on the visitor's key: ask again.
+        if (key && !(await confirmSpend(clip.seconds ?? REVERSE_3D_MAX_SECONDS))) {
+          if (!controller.signal.aborted) setStage("idle");
+          return;
+        }
+        if (controller.signal.aborted) return;
+        const still = await fetch(look.still).then((response) => response.blob());
         await render(clip, still, key, controller);
+      } else {
+        // The still never came: start over from the clip, look first.
+        await start(clip.file, key);
       }
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -573,6 +636,7 @@ export function UnrenderApp() {
   demoRef.current = runDemo;
 
   function another() {
+    confirmRef.current?.(false);
     resetShot();
     setPreview((current) => {
       if (current) URL.revokeObjectURL(current);
@@ -665,6 +729,12 @@ export function UnrenderApp() {
                   setStage("idle");
                 }}
               />
+            ) : stage === "confirm" ? (
+              <SpendConfirm
+                seconds={confirmSeconds}
+                visitorKey={key}
+                onAnswer={(yes) => confirmRef.current?.(yes)}
+              />
             ) : showResult ? (
               <div className="ur-row ur-lift">
                 <button type="button" className="ur-go" onClick={() => download("playblast")}>
@@ -704,7 +774,7 @@ export function UnrenderApp() {
                 Or watch the page un-render the example
               </button>
             ) : null}
-            {note && !busy && stage !== "gate" ? (
+            {note && !busy && stage !== "gate" && stage !== "confirm" ? (
               <p className="ur-note" role="status">
                 {note}
               </p>
@@ -750,7 +820,9 @@ export function UnrenderApp() {
         <section className="ur-how" aria-label="How it works">
           <div>
             <b data-b="t">1 · Drop a finished shot</b>
-            <p data-b="t">MP4, MOV or WebM. Any length, we use the first {REVERSE_3D_MAX_SECONDS} seconds.</p>
+            <p data-b="t">
+              MP4, MOV or WebM. Any length, we use the first {REVERSE_3D_MAX_SECONDS} seconds.
+            </p>
           </div>
           <div>
             <b data-b="t">2 · Watch it un-render</b>
@@ -1007,7 +1079,7 @@ function Gate({
           </form>
         )}
         <p className="ur-fine">
-          It stays in this browser and bills your Comfy account, about 400 credits a video.{" "}
+          It stays in this browser. Renders with your key use Kling and bill your Comfy account, about 500 credits for 10 seconds. You confirm each one first.{" "}
           <a href={KEYS_URL} target="_blank" rel="noopener noreferrer">
             Get a key
           </a>
@@ -1018,6 +1090,48 @@ function Gate({
           {message}
         </p>
       ) : null}
+    </div>
+  );
+}
+
+/** The yes before a paid render: what Kling will cost on the visitor's own Comfy account. */
+function SpendConfirm({
+  seconds,
+  visitorKey,
+  onAnswer,
+}: {
+  seconds: number;
+  visitorKey: string | null;
+  onAnswer: (yes: boolean) => void;
+}) {
+  const clipSeconds = Math.max(1, Math.round(seconds));
+  const credits = Math.round((clipSeconds * KLING_CREDITS_PER_SECOND + STILL_CREDITS) / 10) * 10;
+  return (
+    <div className="ur-gate" role="dialog" aria-label="Confirm the credit spend">
+      <div className="ur-gate-head">
+        <b>Spend about {credits} credits?</b>
+        <button type="button" className="ur-x" aria-label="Cancel" onClick={() => onAnswer(false)}>
+          ×
+        </button>
+      </div>
+      <p className="ur-gate-line">
+        This {clipSeconds}-second shot renders with Kling on your own Comfy account
+        {visitorKey ? (
+          <>
+            {" "}
+            (key ending in <b>{visitorKey.slice(-4)}</b>)
+          </>
+        ) : null}
+        . The playblast look and the video together cost about {credits} credits. Nothing is charged until you say yes.
+      </p>
+      <div className="ur-row ur-confirm-row">
+        <button type="button" className="ur-go" onClick={() => onAnswer(true)} autoFocus>
+          Render for ~{credits} credits
+        </button>
+        <button type="button" className="ur-ghost" onClick={() => onAnswer(false)}>
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }

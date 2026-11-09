@@ -1,3 +1,4 @@
+import { readVisitorKeyHeader } from "@/lib/access";
 import { getApp } from "@/lib/config";
 import { fetchJob } from "@/lib/comfy";
 import { deploymentFailureMessage, deploymentTarget, getDeployment } from "@/lib/deployments";
@@ -8,6 +9,7 @@ import { mockJobView, readMockMeta } from "@/lib/mock";
 import { isPublicApp } from "@/lib/public-surface";
 import { signJobView } from "@/lib/signing";
 import type { JobView } from "@/lib/types";
+import { unrenderJobTarget } from "@/lib/unrender-cloud";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,7 +31,7 @@ function scopeOutputs(app: string, job: JobView): JobView {
   };
 }
 
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;
     if (isMockJobId(id)) {
@@ -42,7 +44,8 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     if (!routed || !isUuid(routed.id) || !isPublicApp(routed.app) || !getDeployment(routed.app)) {
       return errorJson(404, "not_found", "Job not found.");
     }
-    const target = deploymentTarget(routed.app);
+    // Unrender jobs live on the deployment (Kling, the visitor's key) or on Comfy Cloud (open source, free).
+    const target = routed.app === "reverse-3d" ? unrenderJobTarget(readVisitorKeyHeader(request)) : deploymentTarget(routed.app);
     const job = clarifyDeploymentError(target.appTitle, await fetchJob(target, routed.id));
     return Response.json(signJobView(scopeOutputs(routed.app, job)));
   } catch (error) {

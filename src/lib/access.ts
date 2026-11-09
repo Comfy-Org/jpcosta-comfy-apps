@@ -4,9 +4,12 @@ import { AppError } from "@/lib/http";
 import { kvConfigured, kvCount, kvDelete, kvGet, kvSetIfAbsent } from "@/lib/kv";
 
 /**
- * Who may start a paid job on Unrender.
- * - A visitor's own Comfy API key: partner nodes (Nano Banana, Kling) bill that key, so there is no limit here.
- * - An email signed in with a code: one free video per email, paid by the app's key.
+ * Who may start a paid job on Unrender, and which pipeline it gets (src/lib/unrender-cloud.ts).
+ * - A visitor's own Comfy API key: Nano Banana still + Kling on the serverless deployment, the partner nodes
+ *   billed to that key. No limit on how many; the page asks the visitor to confirm the spend before each run.
+ * - An email signed in with a code: one free video per email, open source (Qwen still + Wan VACE) on
+ *   Comfy Cloud, paid by the app's key.
+ * Both up to 10 seconds.
  * The code and the session are signed tokens; the store only keeps which emails used their video and the counters.
  */
 
@@ -18,6 +21,7 @@ const SENDS_PER_HOUR = 4;
 /** Stills an email may draw before its one video (a retry after a bad clip). */
 const STILLS_PER_EMAIL = 3;
 export const VISITOR_KEY_FIELD = "comfyKey";
+export const VISITOR_KEY_HEADER = "x-comfy-key";
 
 export type Access = { kind: "key"; key: string } | { kind: "email"; email: string };
 
@@ -59,7 +63,15 @@ export function normalizeEmail(raw: unknown): string {
 
 /** A pasted Comfy API key, or null when the field is empty. It is never stored on the server. */
 export function readVisitorKey(form: FormData): string | null {
-  const raw = form.get(VISITOR_KEY_FIELD);
+  return checkVisitorKey(form.get(VISITOR_KEY_FIELD));
+}
+
+/** The same key, sent as a header when the browser polls a job or downloads its output. */
+export function readVisitorKeyHeader(request: Request): string | null {
+  return checkVisitorKey(request.headers.get(VISITOR_KEY_HEADER));
+}
+
+function checkVisitorKey(raw: unknown): string | null {
   const key = typeof raw === "string" ? raw.trim() : "";
   if (!key) return null;
   if (!/^[\x21-\x7e]{20,256}$/.test(key)) {
