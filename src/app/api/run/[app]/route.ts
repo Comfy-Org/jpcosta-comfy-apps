@@ -1,3 +1,4 @@
+import { claimFreeVideo, freeVideoUsed, releaseFreeVideo, requireAccess, type Access } from "@/lib/access";
 import { readPresetImage } from "@/lib/box-presets";
 import { getApp } from "@/lib/config";
 import { uploadAsset, submitJob } from "@/lib/comfy";
@@ -29,6 +30,20 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
+/** Takes the email's free video before the job goes out, and gives it back if the job could not start. */
+async function submitWithAccess(access: Access | null, submit: () => Promise<string>): Promise<string> {
+  if (access?.kind !== "email") return submit();
+  if (!(await claimFreeVideo(access.email))) {
+    throw new AppError(403, "free_used", "This email already made its free video. Use your own Comfy API key to make more.");
+  }
+  try {
+    return await submit();
+  } catch (error) {
+    await releaseFreeVideo(access.email).catch(() => {});
+    throw error;
+  }
+}
+
 export async function POST(request: Request, context: { params: Promise<{ app: string }> }) {
   try {
     const { app: appId } = await context.params;
@@ -45,6 +60,14 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
       form = await request.formData();
     } catch {
       throw new AppError(400, "invalid_input", "Upload the image as form data.");
+    }
+    // Unrender spends partner credits: a visitor's own key pays for itself, an email gets one free video.
+    let access: Access | null = null;
+    if (appId === "reverse-3d") {
+      access = requireAccess(request, form);
+      if (access.kind === "email" && (await freeVideoUsed(access.email))) {
+        throw new AppError(403, "free_used", "This email already made its free video. Use your own Comfy API key to make more.");
+      }
     }
 
     const media: Record<string, MediaPart> = {};
@@ -148,13 +171,17 @@ export async function POST(request: Request, context: { params: Promise<{ app: s
       if (!dims) throw new AppError(400, "invalid_input", "Could not read that video's dimensions.");
       applyKlingFrame(body.workflow, dims.width, dims.height);
       if (!assets.reference) dropLookReference(body.workflow);
+      if (access?.kind === "key") body.extra_data = { ...body.extra_data, api_key_comfy_org: access.key };
     }
     let jobId: string;
     if (mock || !target) {
       const saved = await saveMockJob(app, appId, params, imageFiles);
       jobId = saved.id;
     } else {
-      jobId = publicRouteId(appId, await submitJob(target, body, idempotencyKey));
+      jobId = publicRouteId(appId, await submitWithAccess(access, () => submitJob(target, body, idempotencyKey)));
+    }
+    if ((mock || !target) && access?.kind === "email" && !(await claimFreeVideo(access.email))) {
+      throw new AppError(403, "free_used", "This email already made its free video. Use your own Comfy API key to make more.");
     }
 
     return Response.json({

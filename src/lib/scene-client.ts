@@ -394,7 +394,11 @@ function mockStill(source: HTMLCanvasElement): Blob {
  * as a rough grey blocking still. The video job sends that still to Kling as `@Image1`.
  * Only a frame that cannot be read throws. A still that fails comes back as null, and the video runs without it.
  */
-export async function requestPlayblastLook(file: File, onStatus?: (message: string) => void): Promise<PlayblastLook> {
+export async function requestPlayblastLook(
+  file: File,
+  onStatus?: (message: string) => void,
+  visitorKey?: string | null,
+): Promise<PlayblastLook> {
   // One frame in, not 0: a seek to the time the video already sits at never fires, so nothing is decoded yet.
   const canvas = await grabCanvas(file, STILL_FRAME_TIME, STILL_FRAME_SIDE);
   const frame = jpegFrame(canvas, 0.9);
@@ -402,6 +406,7 @@ export async function requestPlayblastLook(file: File, onStatus?: (message: stri
     onStatus?.("Drawing the playblast look…");
     const form = new FormData();
     form.set("step", "still");
+    if (visitorKey) form.set("comfyKey", visitorKey);
     form.append("frame", frame, "frame.jpg");
     const payload = await postSubject(form, onStatus);
     if (payload.mock) return { frame, still: mockStill(canvas), mock: true };

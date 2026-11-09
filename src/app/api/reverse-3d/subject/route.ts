@@ -1,3 +1,4 @@
+import { allowStill, requireAccess } from "@/lib/access";
 import { fetchAssetUrl, fetchDeploymentJson, fetchJob, submitJob, uploadAsset } from "@/lib/comfy";
 import { deploymentTarget, type DeploymentTarget } from "@/lib/deployments";
 import { apiKey, isMockMode, missingKeyMessage } from "@/lib/env";
@@ -219,8 +220,11 @@ export async function POST(request: Request) {
     }
     const times = numbers(form.get("times"));
     const mock = isMockMode();
-    const key = apiKey("reverse-3d");
-    if (!mock && !key) throw new AppError(500, "missing_key", missingKeyMessage("reverse-3d"));
+    if (!mock && !apiKey("reverse-3d")) throw new AppError(500, "missing_key", missingKeyMessage("reverse-3d"));
+    // Every step here is a paid partner job: a visitor key pays for itself, an email gets a few stills.
+    const access = requireAccess(request, form);
+    if (access.kind === "email" && step === "still") await allowStill(access.email);
+    const key = access.kind === "key" ? access.key : apiKey("reverse-3d");
 
     if (step === "pick") {
       const workflow = buildPickWorkflow(files.length);

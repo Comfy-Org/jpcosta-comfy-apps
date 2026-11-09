@@ -30,6 +30,13 @@ assert.equal(decidePublicRequest("GET", "/api/run/reverse-3d").action, "deny");
 assert.equal(decidePublicRequest("POST", "/api/reverse-3d/subject").action, "allow");
 assert.equal(decidePublicRequest("GET", "/api/reverse-3d/subject").action, "allow");
 assert.equal(decidePublicRequest("PUT", "/api/reverse-3d/subject").action, "deny");
+assert.equal(decidePublicRequest("GET", "/api/access").action, "allow");
+assert.equal(decidePublicRequest("DELETE", "/api/access").action, "allow");
+assert.equal(decidePublicRequest("POST", "/api/access").action, "deny");
+assert.equal(decidePublicRequest("POST", "/api/access/code").action, "allow");
+assert.equal(decidePublicRequest("GET", "/api/access/code").action, "deny");
+assert.equal(decidePublicRequest("POST", "/api/access/verify").action, "allow");
+assert.equal(decidePublicRequest("POST", "/api/access/other").action, "deny");
 for (const id of listAppIds()) {
   if (isPublicApp(id)) continue;
   assert.equal(decidePublicRequest("POST", `/api/run/${id}`).action, "deny", id);

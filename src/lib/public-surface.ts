@@ -65,6 +65,15 @@ export function decidePublicRequest(method: string, pathname: string): PublicDec
     return { action: "deny", message: "Unknown app." };
   }
 
+  if (path === "/api/access") {
+    if (read || method === "DELETE") return { action: "allow" };
+    return { action: "deny", message: "Not found." };
+  }
+
+  if (path === "/api/access/code" || path === "/api/access/verify") {
+    return method === "POST" ? { action: "allow" } : { action: "deny", message: "Not found." };
+  }
+
   if (path === "/api/reverse-3d/subject") {
     if (method === "POST" || read) return { action: "allow" };
     return { action: "deny", message: "Not found." };

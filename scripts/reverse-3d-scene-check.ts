@@ -153,11 +153,21 @@ function renderClip(seconds: number, ext: "mp4" | "webm"): Buffer {
   return readFileSync(file);
 }
 
-async function postReverse(video: Buffer, reference: Buffer | null, name = "clip.mp4", type = "video/mp4") {
+const VISITOR_KEY = "comfyui-test-visitor-key-0123456789";
+
+async function postReverse(
+  video: Buffer,
+  reference: Buffer | null,
+  name = "clip.mp4",
+  type = "video/mp4",
+  access: { key?: string | null; cookie?: string } = { key: VISITOR_KEY },
+) {
   const form = new FormData();
+  if (access.key) form.set("comfyKey", access.key);
   form.append("video", new File([new Uint8Array(video)], name, { type }));
   if (reference) form.append("reference", new File([new Uint8Array(reference)], "reference.png", { type: "image/png" }));
-  const response = await POST(new Request("http://localhost/api/run/reverse-3d", { method: "POST", body: form }), {
+  const headers = access.cookie ? { cookie: access.cookie } : undefined;
+  const response = await POST(new Request("http://localhost/api/run/reverse-3d", { method: "POST", body: form, headers }), {
     params: Promise.resolve({ app: "reverse-3d" }),
   });
   const payload = (await response.json()) as {
@@ -895,6 +905,7 @@ async function main() {
 
   // The still itself: one Nano Banana job on the first frame.
   const stillForm = new FormData();
+  stillForm.set("comfyKey", VISITOR_KEY);
   stillForm.set("step", "still");
   stillForm.append("frame", new File([new Uint8Array(png)], "frame.jpg", { type: "image/jpeg" }));
   const stillResponse = await postSubject(new Request("http://localhost/api/reverse-3d/subject", { method: "POST", body: stillForm }));
@@ -913,6 +924,7 @@ async function main() {
   assert.match(String(stillBody.still?.["2"]?.inputs?.prompt), /never turn an object into a person/);
   assert.equal(stillBody.still?.["3"]?.class_type, "SaveImage");
   const twoFrames = new FormData();
+  twoFrames.set("comfyKey", VISITOR_KEY);
   twoFrames.set("step", "still");
   twoFrames.append("frame", new File([new Uint8Array(png)], "a.jpg", { type: "image/jpeg" }));
   twoFrames.append("frame", new File([new Uint8Array(png)], "b.jpg", { type: "image/jpeg" }));
@@ -920,9 +932,55 @@ async function main() {
   assert.equal(twoResponse.status, 400);
   assert.equal(selectImageOutput([{ id: "a", name: "reverse-3d/still_00001_.png" }])?.id, "a");
   assert.equal(selectImageOutput([{ id: "a", name: "reply.txt" }]), null);
+
+  // Access: no key and no session is refused before anything is uploaded.
+  const anonymous = await postReverse(clip4, png, "clip.mp4", "video/mp4", {});
+  assert.equal(anonymous.status, 401, JSON.stringify(anonymous.payload));
+  const badKey = await postReverse(clip4, png, "clip.mp4", "video/mp4", { key: "short" });
+  assert.equal(badKey.status, 400);
+  // A visitor key bills the partner nodes to that key.
+  assert.equal((ok.payload.request as { extra_data?: { api_key_comfy_org?: string } } | undefined)?.extra_data?.api_key_comfy_org, "<redacted>");
+
+  // Email: a code (shown in mock mode), a session cookie, one free video, then refused.
+  const codeRoute = await import("../src/app/api/access/code/route");
+  const verifyRoute = await import("../src/app/api/access/verify/route");
+  const accessRoute = await import("../src/app/api/access/route");
+  const askCode = async (email: string) => {
+    const response = await codeRoute.POST(new Request("http://localhost/api/access/code", { method: "POST", body: JSON.stringify({ email }) }));
+    return { status: response.status, body: (await response.json()) as { challenge?: string; devCode?: string; error?: { code?: string } } };
+  };
+  assert.equal((await askCode("not an email")).status, 400);
+  const asked = await askCode("Someone@Example.com ");
+  assert.equal(asked.status, 200);
+  assert.match(asked.body.devCode ?? "", /^\d{6}$/);
+  const wrongDigit = asked.body.devCode === "000000" ? "111111" : "000000";
+  const wrong = await verifyRoute.POST(new Request("http://localhost/api/access/verify", { method: "POST", body: JSON.stringify({ challenge: asked.body.challenge, code: wrongDigit }) }));
+  assert.equal(wrong.status, 400);
+  const verified = await verifyRoute.POST(new Request("http://localhost/api/access/verify", { method: "POST", body: JSON.stringify({ challenge: asked.body.challenge, code: asked.body.devCode }) }));
+  assert.equal(verified.status, 200);
+  const setCookie = verified.headers.get("set-cookie") ?? "";
+  assert.match(setCookie, /^unrender_session=[^;]+; Path=\/; HttpOnly; SameSite=Lax/);
+  const cookie = setCookie.split(";")[0];
+  const me = (await (await accessRoute.GET(new Request("http://localhost/api/access", { headers: { cookie } }))).json()) as { email?: string; used?: boolean };
+  assert.deepEqual([me.email, me.used], ["someone@example.com", false]);
+  const tampered = cookie.slice(0, -3) + (cookie.endsWith("abc") ? "xyz" : "abc");
+  assert.equal((await postReverse(clip4, png, "clip.mp4", "video/mp4", { cookie: tampered })).status, 401);
+  const free = await postReverse(clip4, png, "clip.mp4", "video/mp4", { cookie });
+  assert.equal(free.status, 200, JSON.stringify(free.payload));
+  const again = await postReverse(clip4, png, "clip.mp4", "video/mp4", { cookie });
+  assert.equal(again.status, 403);
+  const usedStill = new FormData();
+  usedStill.append("frame", new File([new Uint8Array(png)], "frame.jpg", { type: "image/jpeg" }));
+  usedStill.set("step", "still");
+  const usedStillResponse = await postSubject(new Request("http://localhost/api/reverse-3d/subject", { method: "POST", body: usedStill, headers: { cookie } }));
+  assert.equal(usedStillResponse.status, 403);
+  assert.equal((await askCode("someone@example.com")).status, 409, "a used email gets no new code");
+  // The same email with its own key still works.
+  assert.equal((await postReverse(clip4, png)).status, 200);
   assert.deepEqual(workflow["20"]?.inputs["model.video_1"], ["16", 0]);
 
   const subjectForm = new FormData();
+  subjectForm.set("comfyKey", VISITOR_KEY);
   subjectForm.set("step", "pick");
   subjectForm.set("times", "0.4,1.2");
   subjectForm.append("frame", new File([new Uint8Array(png)], "frame_1.jpg", { type: "image/jpeg" }));
@@ -948,6 +1006,7 @@ async function main() {
 
   // The second job: the chosen frame, a close-up per subject, their kinds and where each sits in its close-up.
   const markForm = new FormData();
+  markForm.set("comfyKey", VISITOR_KEY);
   markForm.set("step", "mark");
   markForm.append("frame", new File([new Uint8Array(png)], "frame.jpg", { type: "image/jpeg" }));
   for (let index = 0; index < 3; index += 1) {
@@ -992,6 +1051,7 @@ async function main() {
   await refused((form) => form.append("frame", new File([new Uint8Array(png)], "frame_2.jpg", { type: "image/jpeg" })), /chosen frame once/);
 
   const cutoutForm = new FormData();
+  cutoutForm.set("comfyKey", VISITOR_KEY);
   cutoutForm.set("step", "cutout");
   cutoutForm.append("frame", new File([new Uint8Array(png)], "frame_1.jpg", { type: "image/jpeg" }));
   const cutoutResponse = await postSubject(new Request("http://localhost/api/reverse-3d/subject", { method: "POST", body: cutoutForm }));
