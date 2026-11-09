@@ -219,10 +219,15 @@ async function readJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function pollJob(jobId: string): Promise<JobPayload> {
+/** Jobs started with the visitor's own key live on their Comfy Cloud account: polls and downloads send the key. */
+function keyHeaders(visitorKey?: string | null): Record<string, string> {
+  return visitorKey ? { "x-comfy-key": visitorKey } : {};
+}
+
+async function pollJob(jobId: string, visitorKey?: string | null): Promise<JobPayload> {
   const started = Date.now();
   while (Date.now() - started < 3 * 60 * 1000) {
-    const response = await fetch(`/api/jobs/${jobId}`);
+    const response = await fetch(`/api/jobs/${jobId}`, { headers: keyHeaders(visitorKey) });
     const payload = await readJson<JobPayload>(response);
     if (!response.ok) throw new Error(payload.error?.message || "Could not build a 3D blockout from that clip.");
     if (payload.status === "succeeded") return payload;
@@ -411,10 +416,10 @@ export async function requestPlayblastLook(
     const payload = await postSubject(form, onStatus);
     if (payload.mock) return { frame, still: mockStill(canvas), mock: true };
     if (!payload.jobId) return { frame, still: null };
-    const job = await pollJob(payload.jobId);
+    const job = await pollJob(payload.jobId, visitorKey);
     const output = selectImageOutput(job.outputs ?? []);
     if (!output?.sig) return { frame, still: null };
-    const response = await fetch(`/api/outputs/${output.id}?sig=${output.sig}`);
+    const response = await fetch(`/api/outputs/${output.id}?sig=${output.sig}`, { headers: keyHeaders(visitorKey) });
     if (!response.ok) return { frame, still: null };
     return { frame, still: await asJpeg(await response.blob()) };
   } catch {

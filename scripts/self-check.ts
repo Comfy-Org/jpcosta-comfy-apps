@@ -37,7 +37,13 @@ import { easeSlide, exitOpacity, trackGap } from "../src/lib/ease-slide";
 import { readSceneChoice, signSceneChoice } from "../src/lib/scene-token";
 import { isAllowedVideoMime } from "../src/lib/media";
 import { REVERSE_3D_MAX_SECONDS, REVERSE_3D_MIN_SECONDS } from "../src/lib/video-client";
-import { applyPlayblastShape, dropLookReference, fitPlayblastFrame, playblastFrameCount } from "../src/lib/reverse-3d-look";
+import {
+  applyPlayblastShape,
+  dropLookReference,
+  fitPlayblastFrame,
+  PLAYBLAST_KEY_MAX_SECONDS,
+  playblastFrameCount,
+} from "../src/lib/reverse-3d-look";
 import { videoTypeRejectReason } from "../src/lib/prepare-image";
 import { buildJobBody, redactJobBody } from "../src/lib/workflow";
 
@@ -589,13 +595,39 @@ assert.equal(reverseJob.workflow["3"].inputs.seed, 42);
 assert.equal(reverseJob.workflow["16"].inputs.fps, 16);
 assert.equal(JSON.stringify(reverseJob.workflow).includes("Kling"), false);
 // The run route fits the graph to the clip: a 1920x1080, 10 second clip renders 161 frames at 832x464.
-assert.deepEqual(applyPlayblastShape(reverseJob.workflow, 1920, 1080, 10), { width: 832, height: 464, frames: 161 });
+assert.deepEqual(applyPlayblastShape(reverseJob.workflow, 1920, 1080, 10), { width: 832, height: 464, frames: 161, seconds: 10, chunks: 1 });
 assert.equal(reverseJob.workflow["32"].inputs.width, 832);
 assert.deepEqual(fitPlayblastFrame(1080, 1920), { width: 464, height: 832 });
 assert.deepEqual(fitPlayblastFrame(960, 720), { width: 832, height: 624 });
 assert.equal(playblastFrameCount(3), 49);
 assert.equal(playblastFrameCount(null), 161);
 assert.equal(playblastFrameCount(30), 161);
+// With the visitor's own key the cap is 60 seconds, every frame kept, rendered 161 frames per VACE pass.
+assert.equal(playblastFrameCount(30, PLAYBLAST_KEY_MAX_SECONDS), 480);
+assert.equal(playblastFrameCount(90, PLAYBLAST_KEY_MAX_SECONDS), 960);
+assert.equal(playblastFrameCount(8, PLAYBLAST_KEY_MAX_SECONDS), 129);
+const longJob = buildJobBody(reverse3d, { video: { id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", filePath: "input.mp4" } }, { seed: 9, hasImage: true }, null);
+assert.deepEqual(applyPlayblastShape(longJob.workflow, 1280, 720, 30, PLAYBLAST_KEY_MAX_SECONDS), {
+  width: 832,
+  height: 464,
+  frames: 480,
+  seconds: 30,
+  chunks: 3,
+});
+assert.equal(longJob.workflow["11"].inputs.duration, 30);
+assert.equal(longJob.workflow["49"], undefined);
+assert.deepEqual(
+  ["1001", "1011", "1021"].map((id) => [longJob.workflow[id].inputs.length, longJob.workflow[id].inputs.seed ?? longJob.workflow[String(Number(id) + 1)].inputs.seed]),
+  [[161, 9], [161, 9], [161, 9]],
+);
+assert.deepEqual(longJob.workflow["1020"].inputs, { image: ["40", 0], batch_index: 322, length: 158 });
+assert.deepEqual(longJob.workflow["1025"].inputs, { image: ["1024", 0], batch_index: 0, length: 158 });
+assert.deepEqual(longJob.workflow["1026"].inputs, { image1: ["1016", 0], image2: ["1025", 0] });
+assert.deepEqual(longJob.workflow["33"].inputs.image, ["1026", 0]);
+assert.deepEqual(longJob.workflow["1021"].inputs.reference_image, ["32", 0]);
+dropLookReference(longJob.workflow);
+assert.equal(longJob.workflow["1021"].inputs.reference_image, undefined);
+assert.equal(longJob.workflow["1001"].inputs.reference_image, undefined);
 // No still came with the run: nodes 30-32 go and VACE gets no reference image.
 dropLookReference(reverseJob.workflow);
 assert.equal(reverseJob.workflow["30"], undefined);

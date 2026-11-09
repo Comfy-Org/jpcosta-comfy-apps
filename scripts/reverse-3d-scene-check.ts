@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { unrenderTarget } from "../src/lib/unrender-cloud";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -905,7 +906,7 @@ async function main() {
   const workflow = ok.payload.request?.workflow;
   assert.ok(workflow);
   assert.equal(workflow["11"]?.class_type, "Video Slice");
-  assert.equal(workflow["11"]?.inputs.duration, 10);
+  assert.equal(workflow["11"]?.inputs.duration, 4);
   assert.equal(workflow["12"]?.class_type, "VideoFrameSample");
   assert.deepEqual(workflow["12"]?.inputs.video, ["11", 0]);
   assert.deepEqual(workflow["15"]?.inputs.video, ["12", 0]);
@@ -924,8 +925,22 @@ async function main() {
   assert.equal(workflow["16"]?.inputs.fps, 16);
   assert.deepEqual(workflow["21"]?.inputs.video, ["16", 0]);
 
-  // A 12 second clip is sampled as its first 10 seconds: 161 frames.
-  assert.equal(longMp4.payload.request?.workflow?.["12"]?.inputs.num_frames, 161);
+  // With the visitor's key a 12 second clip keeps all 12 seconds: 192 frames in two VACE passes (161, then 31 padded to 33).
+  const long = longMp4.payload.request?.workflow;
+  assert.ok(long);
+  assert.equal(long["11"]?.inputs.duration, 12);
+  assert.equal(long["12"]?.inputs.num_frames, 192);
+  assert.equal(long["49"], undefined);
+  assert.equal(long["3"], undefined);
+  assert.deepEqual(long["1000"]?.inputs, { image: ["40", 0], batch_index: 0, length: 161 });
+  assert.equal(long["1001"]?.inputs.length, 161);
+  assert.deepEqual(long["1010"]?.inputs, { image: ["40", 0], batch_index: 161, length: 31 });
+  assert.equal(long["1011"]?.inputs.length, 33);
+  assert.equal(long["1011"]?.inputs.reference_image, undefined);
+  assert.deepEqual(long["1015"]?.inputs, { image: ["1014", 0], batch_index: 0, length: 31 });
+  assert.deepEqual(long["1016"]?.inputs, { image1: ["1004", 0], image2: ["1015", 0] });
+  assert.deepEqual(long["33"]?.inputs.image, ["1016", 0]);
+  assert.equal(long["1012"]?.inputs.seed, long["1002"]?.inputs.seed);
 
 
   // The still itself: one Qwen Image Edit job on the first frame, with its colour taken out.
@@ -970,8 +985,10 @@ async function main() {
   assert.equal(anonymous.status, 401, JSON.stringify(anonymous.payload));
   const badKey = await postReverse(clip4, png, "clip.mp4", "video/mp4", { key: "short" });
   assert.equal(badKey.status, 400);
-  // A visitor key bills the partner nodes to that key.
-  assert.equal((ok.payload.request as { extra_data?: { api_key_comfy_org?: string } } | undefined)?.extra_data?.api_key_comfy_org, "<redacted>");
+  // A visitor key is not put in the job: it authenticates the job on the visitor's own Comfy Cloud account.
+  assert.equal((ok.payload.request as { extra_data?: unknown } | undefined)?.extra_data, undefined);
+  const visitorTarget = unrenderTarget(VISITOR_KEY);
+  assert.deepEqual([visitorTarget.baseUrl, visitorTarget.key, visitorTarget.visitorKey], ["https://cloud.comfy.org", VISITOR_KEY, true]);
 
   // Email: a code (shown in mock mode), a session cookie, one free video, then refused.
   const codeRoute = await import("../src/app/api/access/code/route");
@@ -997,8 +1014,13 @@ async function main() {
   assert.deepEqual([me.email, me.used], ["someone@example.com", false]);
   const tampered = cookie.slice(0, -3) + (cookie.endsWith("abc") ? "xyz" : "abc");
   assert.equal((await postReverse(clip4, png, "clip.mp4", "video/mp4", { cookie: tampered })).status, 401);
-  const free = await postReverse(clip4, png, "clip.mp4", "video/mp4", { cookie });
+  // The free video is the first 10 seconds of a 12 second clip: one VACE pass of 161 frames.
+  const free = await postReverse(clip12, png, "clip.mp4", "video/mp4", { cookie });
   assert.equal(free.status, 200, JSON.stringify(free.payload));
+  assert.equal(free.payload.request?.workflow?.["11"]?.inputs.duration, 10);
+  assert.equal(free.payload.request?.workflow?.["12"]?.inputs.num_frames, 161);
+  assert.equal(free.payload.request?.workflow?.["49"]?.inputs.length, 161);
+  assert.equal(free.payload.request?.workflow?.["1001"], undefined);
   const again = await postReverse(clip4, png, "clip.mp4", "video/mp4", { cookie });
   assert.equal(again.status, 403);
   const usedStill = new FormData();

@@ -1,8 +1,16 @@
 # Reverse 3D (Unrender)
 
-Input: a finished video. Only the first 10 seconds are used (node 11, Video Slice, and the browser trims to the same 10 seconds).
+Input: a finished video. Only the first 10 seconds are used, or 60 with the visitor's own key (node 11, Video Slice, set per clip; the browser trims to the same length).
 
-Output: a rough grey Blender-viewport blocking playblast at 16 fps, made with open-source models only: Qwen Image Edit draws the look, Wan 2.1 VACE renders the video. No partner node runs, so the deployment's account pays the GPU time. The side-by-side compare (original left, playblast right) is built in the browser by time, so the 16 fps playblast lines up with the original at any frame rate. The old Kling 4.0 Flash graph is kept as `workflow_kling_api.json`.
+Output: a rough grey Blender-viewport blocking playblast at 16 fps, made with open-source models only: Qwen Image Edit draws the look, Wan 2.1 VACE renders the video.
+
+## Where it runs and who pays
+
+Unrender submits to Comfy Cloud itself (`https://cloud.comfy.org`, the same Comfy API v2 as a deployment; `src/lib/unrender-cloud.ts`), not to the serverless deployment, which lacks the node packs and models.
+- **The visitor's own Comfy API key:** the still and the video run on their Comfy Cloud account and spend their credits. No limit on how many; clips up to 60 seconds (the browser compresses the clip to fit the 4.5 MB upload). The browser sends the key with each job poll and download as `x-comfy-key`, because the job lives on that account. Their account needs a Comfy Cloud plan that runs workflows.
+- **An email signed in with a code:** one free video, the first 10 seconds, on the app's `COMFY_API_KEY_TEAM`.
+
+Past 10 seconds VACE renders in passes of 161 frames inside the same job (`splitPlayblastPasses`): each pass gets its slice of the depth frames, the same still, prompts and seed, and the passes are joined before the colour comes out. The last pass is padded to 4n + 1 frames and cut back. Tested on Comfy Cloud with two passes of 81 frames: the join shows only a small jump. The side-by-side compare (original left, playblast right) is built in the browser by time, so the 16 fps playblast lines up with the original at any frame rate. The old Kling 4.0 Flash graph is kept as `workflow_kling_api.json`.
 
 ## The look: one still, then the video
 
@@ -14,9 +22,9 @@ Output: a rough grey Blender-viewport blocking playblast at 16 fps, made with op
 
 LoadVideo → Video Slice (first 10 s) → VideoFrameSample (uniform, the frames that make 16 fps) → GetVideoComponents → ImageScale (node 17, centre crop) → DepthAnythingV2 (node 40) → WanVaceToVideo (node 49: depth as `control_video`, the grey still as `reference_image`) → KSampler (4 steps, lcm, cfg 1, lightx2v LoRA, shift 8) → TrimVideoLatent (drops the reference frame) → VAEDecode → ImageDesaturate+ (node 33) → CreateVideo 16 fps → SaveVideo.
 
-The run route fits the graph to each clip (`applyPlayblastShape`): the frame keeps the clip's shape with its longer side at 832 and both sides on 16-pixel blocks (1920×1080 becomes 832×464, 960×720 becomes 832×624), and the frame count is the clip's length at 16 fps as 4n + 1, from 17 to 161 (161 for 10 s). The server reads the size from the file (MP4/MOV sample size with the rotation matrix, WebM PixelWidth/PixelHeight) and the length from the container, capped by the length the browser sends.
+The run route fits the graph to each clip (`applyPlayblastShape`): the frame keeps the clip's shape with its longer side at 832 and both sides on 16-pixel blocks (1920×1080 becomes 832×464, 960×720 becomes 832×624), and the frame count is the clip's length at 16 fps: up to 10 s as 4n + 1, from 17 to 161 (161 for 10 s), longer clips every frame (480 for 30 s, in three passes). The server reads the size from the file (MP4/MOV sample size with the rotation matrix, WebM PixelWidth/PixelHeight) and the length from the container, capped by the length the browser sends.
 
-Models the deployment needs: `wan2.1_vace_14B_fp16`, `Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32`, `umt5_xxl_fp16`, `wan_2.1_vae`, `depth_anything_v2_vitl.pth`, `qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_comfyui`, `qwen_2.5_vl_7b_fp8_scaled`, `qwen_image_vae`, and the comfyui_essentials nodes (`ImageDesaturate+`).
+Models the graph uses (all on Comfy Cloud): `wan2.1_vace_14B_fp16`, `Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32`, `umt5_xxl_fp16`, `wan_2.1_vae`, `depth_anything_v2_vitl.pth`, `qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_comfyui`, `qwen_2.5_vl_7b_fp8_scaled`, `qwen_image_vae`, and the comfyui_essentials nodes (`ImageDesaturate+`).
 
 Measured on Comfy Cloud (RTX Pro 6000): a 10 second clip at 832×464 took 112.5 GPU seconds for the video, about 32 credits at the measured 0.29 credits per GPU second. A 5 second clip is about 15 credits. The Kling graph cost about 400 credits for 10 seconds.
 

@@ -30,6 +30,10 @@ export type DeploymentTarget = {
   appTitle: string;
   baseUrl: string;
   deploymentId: string;
+  /** Key for this target instead of the app's env key (Unrender on Comfy Cloud). */
+  key?: string;
+  /** The key is the visitor's own, so a rejection is theirs to fix. */
+  visitorKey?: boolean;
 };
 
 let cached: DeploymentsFile | null = null;
