@@ -169,6 +169,8 @@ export function UnrenderApp() {
   const [aspect, setAspect] = useState(4 / 3);
   /** Seconds since the clip came in, while it is read and its still is drawn. */
   const [prepWaited, setPrepWaited] = useState(0);
+  /** A colour option for the headline and the main button (?theme=ink|cycles|lime|clay|teal), while JP picks one. */
+  const [theme, setTheme] = useState<string | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -203,6 +205,8 @@ export function UnrenderApp() {
     // The stored key is read after hydration, so the server and the first client render agree.
     void Promise.resolve().then(() => setKey(readStoredKey()));
     void refreshAccess();
+    const option = new URLSearchParams(window.location.search).get("theme");
+    if (option && /^[a-z]{2,12}$/.test(option)) void Promise.resolve().then(() => setTheme(option));
     // /unrender?demo plays the effect on the example straight away.
     if (new URLSearchParams(window.location.search).has("demo")) void Promise.resolve().then(() => demoRef.current());
     return () => {
@@ -679,7 +683,7 @@ export function UnrenderApp() {
             : null;
 
   return (
-    <div className={`ur${covered ? " grey" : ""}${hot ? " hot" : ""}`} ref={rootRef} data-stage={stage}>
+    <div className={`ur${covered ? " grey" : ""}${hot ? " hot" : ""}`} ref={rootRef} data-stage={stage} data-theme={theme ?? undefined}>
       <div className="ur-page" aria-hidden={covered ? true : undefined}>
         <nav className="ur-nav">
           <a className="ur-logo" href="/unrender" data-b>
