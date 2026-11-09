@@ -339,8 +339,8 @@ export class PageUnrender {
         if (shot && shot.kind === "img" && cx > shot.x && cx < shot.x + shot.w && cy > shot.y && cy < shot.y + shot.h) continue;
         const index = row * cols + col;
         const since = this.brushed.get(index);
-        // A cell still clay keeps its start, so it does not un-render again while the cursor sits on it.
-        if (since === undefined || now - since > HOVER_RESOLVE_MS + HOVER_HOLD_MS) this.brushed.set(index, now);
+        // A cell still clay stays clay while the cursor sits on it: only a cell that had flipped back un-renders again.
+        if (since === undefined) this.brushed.set(index, now);
         else if (now - since > HOVER_RESOLVE_MS) this.brushed.set(index, now - HOVER_RESOLVE_MS);
       }
     }
