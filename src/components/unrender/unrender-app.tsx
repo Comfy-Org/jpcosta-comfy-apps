@@ -11,7 +11,7 @@ import { VideoSplit } from "@/components/reverse-3d-steps";
 import { PageUnrender } from "@/components/unrender/page-unrender";
 
 /**
- * Unrender: one page. Drop a finished shot; while the video renders the page itself turns into grey blocking,
+ * Unrender: one page. Drop a finished shot; while the video renders the page itself turns into grey clay,
  * tile by tile; the playblast then plays inside the grey page.
  * Access: the visitor's own Comfy API key (kept in this browser), or one free video per email signed in with a code.
  */
@@ -703,7 +703,7 @@ export function UnrenderApp() {
           <div className="ur-copy">
             <h1 data-b="t">Turn any final shot back into a playblast</h1>
             <p className="ur-sub" data-b="t">
-              Drop a clip and we un-render it, all the way back to grey blocking. Up to {REVERSE_3D_MAX_SECONDS} seconds.
+              Drop a clip and we un-render it, all the way back to a grey clay render. Up to {REVERSE_3D_MAX_SECONDS} seconds.
             </p>
             {stage === "gate" ? (
               <Gate
@@ -826,7 +826,7 @@ export function UnrenderApp() {
           </div>
           <div>
             <b data-b="t">2 · Watch it un-render</b>
-            <p data-b="t">This page turns back into blocking while the GPU works. A few minutes.</p>
+            <p data-b="t">This page turns back into clay while the GPU works. A few minutes.</p>
           </div>
           <div>
             <b data-b="t">3 · Get the playblast</b>

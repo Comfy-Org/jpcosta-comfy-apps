@@ -1,4 +1,4 @@
-/* Unrender: one styled page that turns into grey blocking while the video renders. No fades anywhere. */
+/* Unrender: one styled page that turns into grey clay while the video renders. No fades anywhere. */
 
 body:has(.ur) { background: #fff; }
 

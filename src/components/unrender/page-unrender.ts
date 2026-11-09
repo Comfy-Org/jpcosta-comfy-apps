@@ -1,5 +1,5 @@
 /**
- * The Unrender page's wait screen: the page itself turns into grey blocking, tile by tile, like a Cycles render
+ * The Unrender page's wait screen: the page itself turns into grey clay, tile by tile, like a Cycles render
  * running backwards. Every element marked `data-b` is drawn as a block: "box" (buttons, pills), "t" (text, one bar
  * per line) or "img" (the shot, drawn as its grey playblast still). Tiles spiral out from the shot.
  * The page around the shot starts at once; the tiles over the shot wait for its still, then flip in one quick run.

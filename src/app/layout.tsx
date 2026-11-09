@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Unrender",
-  description: "Turn any final shot back into a grey blocking playblast.",
+  description: "Turn any final shot back into a grey clay playblast.",
 };
 
 export const viewport: Viewport = {
