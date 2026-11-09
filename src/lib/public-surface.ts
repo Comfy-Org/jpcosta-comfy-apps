@@ -12,6 +12,8 @@ const PUBLIC_PAGE = "/unrender";
 const OLD_PAGE = "/reverse-3d";
 /** Example clips on the page, served from public/examples. */
 const EXAMPLES = /^\/examples\/[a-z0-9-]+\.(mp4|jpg|png|webp)$/;
+/** The tab icon (a spinning clay cube), served from public/brand. */
+const BRAND = /^\/brand\/[a-z0-9-]+\.(gif|png)$/;
 
 export function isPublicApp(id: string): boolean {
   return (PUBLIC_APP_IDS as readonly string[]).includes(id);
@@ -53,7 +55,7 @@ export function decidePublicRequest(method: string, pathname: string): PublicDec
 
   if (path === "/" || path === OLD_PAGE) return { action: "redirect", location: PUBLIC_PAGE };
 
-  if (EXAMPLES.test(path)) {
+  if (EXAMPLES.test(path) || BRAND.test(path)) {
     return read ? { action: "allow" } : { action: "deny", message: "Not found." };
   }
 

@@ -10,6 +10,7 @@ import { composeSideBySide, prepareReverse3dUpload, REVERSE_3D_MAX_SECONDS } fro
 import { VideoSplit } from "@/components/reverse-3d-steps";
 import { ComfyLogo } from "@/components/unrender/comfy-logo";
 import { PageUnrender } from "@/components/unrender/page-unrender";
+import { useSpinningFavicon } from "@/components/unrender/spinning-favicon";
 
 /**
  * Unrender: one page. Drop a finished shot; while the video renders the page itself turns into grey clay,
@@ -246,6 +247,8 @@ export function UnrenderApp() {
   useEffect(() => {
     engineRef.current?.setGoal(goal);
   }, [goal]);
+
+  useSpinningFavicon();
 
   // While the page waits for a shot, the cursor un-renders the page around it.
   useEffect(() => {
