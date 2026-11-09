@@ -2,6 +2,7 @@
  * The Unrender page's wait screen: the page itself turns into grey blocking, tile by tile, like a Cycles render
  * running backwards. Every element marked `data-b` is drawn as a block: "box" (buttons, pills), "t" (text, one bar
  * per line) or "img" (the shot, drawn as its grey playblast still). Tiles spiral out from the shot.
+ * The page around the shot starts at once; the tiles over the shot wait for its still, then flip in one quick run.
  * No fades: a tile is either the styled page or the grey page, with render noise on the tiles being worked on.
  */
 
@@ -19,6 +20,8 @@ const SHOT = "#bfc2c8";
 const CORNER = "#ff8a2a";
 /** How far a tile row eases toward the goal each frame, so a jump in progress still lands tile by tile. */
 const CATCH_UP = 0.12;
+/** Tiles per frame the shot flips at once its still is in. */
+const SHOT_STEP = 0.4;
 
 function reducedMotion(): boolean {
   return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -114,7 +117,12 @@ export class PageUnrender {
   private grey = document.createElement("canvas");
   private noise: HTMLCanvasElement;
   private blocks: Block[] = [];
+  /** Tiles clear of the shot, spiralling out from it. */
   private order: number[] = [];
+  /** Tiles over the shot, which wait for its still. */
+  private shotOrder: number[] = [];
+  private shotShown = 0;
+  private shotReady = false;
   private cols = 1;
   private rows = 1;
   private width = 0;
@@ -154,6 +162,12 @@ export class PageUnrender {
     this.goal = next;
   }
 
+  /** The shot's still (or grey frame) is in: its tiles may flip. */
+  setShotReady(ready: boolean) {
+    if (!ready) this.filled = false;
+    this.shotReady = ready;
+  }
+
   setImages(images: UnrenderImages) {
     this.images = images;
     this.dirty = true;
@@ -187,12 +201,24 @@ export class PageUnrender {
     const shot = this.blocks.find((block) => block.kind === "img");
     const cx = shot && shot.kind === "img" ? Math.floor((shot.x + shot.w / 2) / tile) : (cols - 1) / 2;
     const cy = shot && shot.kind === "img" ? Math.floor((shot.y + shot.h / 2) / tile) : Math.min(rows - 1, 4);
-    if (cols !== this.cols || rows !== this.rows || this.order.length !== cols * rows) {
+    const over = (index: number) => {
+      if (!shot || shot.kind !== "img") return false;
+      const x = (index % cols) * tile;
+      const y = Math.floor(index / cols) * tile;
+      return x < shot.x + shot.w - 1 && x + tile > shot.x + 1 && y < shot.y + shot.h - 1 && y + tile > shot.y + 1;
+    };
+    const spiral = spiralFrom(cols, rows, cx, cy);
+    const order = spiral.filter((index) => !over(index));
+    const shotOrder = spiral.filter(over);
+    if (order.join() !== this.order.join() || shotOrder.join() !== this.shotOrder.join()) {
       const ratio = this.order.length ? this.shown / this.order.length : 0;
+      const shotRatio = this.shotOrder.length ? this.shotShown / this.shotOrder.length : 0;
       this.cols = cols;
       this.rows = rows;
-      this.order = spiralFrom(cols, rows, cx, cy);
-      this.shown = ratio * this.order.length;
+      this.order = order;
+      this.shotOrder = shotOrder;
+      this.shown = ratio * order.length;
+      this.shotShown = shotRatio * shotOrder.length;
     }
     this.paintGrey();
     this.dirty = false;
@@ -251,8 +277,14 @@ export class PageUnrender {
     const gap = goal - this.shown;
     if (this.reduce || Math.abs(gap) < 0.02) this.shown = goal;
     else this.shown += Math.sign(gap) * Math.min(Math.abs(gap), Math.max(0.12, Math.abs(gap) * CATCH_UP));
+    // The shot flips in one quick run once its still is in, and back out with the page.
+    const shotTotal = this.shotOrder.length;
+    const shotGoal = this.shotReady && this.goal > 0 ? shotTotal : 0;
+    const shotGap = shotGoal - this.shotShown;
+    if (this.reduce || Math.abs(shotGap) < 0.02) this.shotShown = shotGoal;
+    else this.shotShown += Math.sign(shotGap) * Math.min(Math.abs(shotGap), Math.max(SHOT_STEP, Math.abs(shotGap) * CATCH_UP));
     this.draw(now);
-    if (!this.filled && this.goal === 1 && this.shown >= total) {
+    if (!this.filled && this.goal === 1 && this.shown >= total && this.shotShown >= shotTotal) {
       this.filled = true;
       this.onFilled?.();
     }
@@ -266,23 +298,30 @@ export class PageUnrender {
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     const total = this.order.length;
     const done = Math.min(total, Math.floor(this.shown + 1e-6));
-    if (done === 0 && this.goal === 0) return;
+    const shotTotal = this.shotOrder.length;
+    const shotDone = Math.min(shotTotal, Math.floor(this.shotShown + 1e-6));
+    if (done === 0 && shotDone === 0 && this.goal === 0) return;
     const tile = this.width / cols;
     const px = tile * dpr;
-    for (let k = 0; k < done; k += 1) {
-      const index = this.order[k];
+    const copy = (index: number) => {
       const sx = Math.floor((index % cols) * px);
       const sy = Math.floor(Math.floor(index / cols) * px);
       const sw = Math.ceil(px) + 1;
       ctx.drawImage(this.grey, sx, sy, sw, sw, sx, sy, sw, sw);
-    }
-    if (done >= total || this.goal === 0) return;
+    };
+    for (let k = 0; k < done; k += 1) copy(this.order[k]);
+    for (let k = 0; k < shotDone; k += 1) copy(this.shotOrder[k]);
+    if (this.goal === 0) return;
     // The next few tiles are "rendering": noise and orange corners, like Cycles.
+    const active: number[] = [];
+    for (let k = done; k < Math.min(done + 3, total); k += 1) active.push(this.order[k]);
+    if (this.shotReady) for (let k = shotDone; k < Math.min(shotDone + 2, shotTotal); k += 1) active.push(this.shotOrder[k]);
+    if (!active.length) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.lineWidth = 2;
     ctx.strokeStyle = CORNER;
-    for (let k = done; k < Math.min(done + 3, total); k += 1) {
-      const index = this.order[k];
+    for (let k = 0; k < active.length; k += 1) {
+      const index = active[k];
       const x = (index % cols) * tile;
       const y = Math.floor(index / cols) * tile;
       const offset = this.reduce ? 0 : Math.floor((now / 40 + k * 37) % 64);

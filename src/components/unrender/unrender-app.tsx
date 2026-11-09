@@ -34,7 +34,12 @@ const TYPICAL_SECONDS = 240;
 const POLL_LIMIT_MS = 20 * 60 * 1000;
 /** The demo plays the whole un-render on the example clip with no job and no credits. */
 const DEMO = { clip: "/examples/plaza.mp4", frame: "/examples/plaza.jpg", still: "/examples/plaza-still.jpg", playblast: "/examples/plaza-playblast.mp4" };
-const DEMO_LOOK_MS = 1600;
+/** The demo's still "arrives" after this, like the real one, so the page around the shot goes first. */
+const DEMO_LOOK_MS = 5000;
+/** While the clip is read and its still is drawn, the page around the shot creeps up to this share of its tiles. */
+const PREP_SHARE = 0.18;
+/** Seconds the prep creep takes to get most of the way there (the still takes about 10–20 s). */
+const PREP_SECONDS = 9;
 const DEMO_RENDER_MS = 16000;
 /** The grey page holds a beat before the playblast wipes in. */
 const FILLED_HOLD_MS = 700;
@@ -151,6 +156,8 @@ export function UnrenderApp() {
   const [toast, setToast] = useState<string | null>(null);
   /** The shot's shape, so the frame fits the clip with no bars. The example is 4:3. */
   const [aspect, setAspect] = useState(4 / 3);
+  /** Seconds since the clip came in, while it is read and its still is drawn. */
+  const [prepWaited, setPrepWaited] = useState(0);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -194,20 +201,34 @@ export function UnrenderApp() {
   // Kling rarely reports progress, so the tiles also follow the time the job has taken.
   const estimate = 1 - Math.exp(-waited / (TYPICAL_SECONDS / 2.5));
   const share = Math.max(progress, estimate);
+  const preparing = stage === "reading" || stage === "look";
+  // The page around the shot does not wait for the still: it starts as soon as the clip comes in.
+  const prepShare = PREP_SHARE * (1 - Math.exp(-prepWaited / PREP_SECONDS));
+  const renderShare = PREP_SHARE + (0.97 - PREP_SHARE) * share;
   const goal =
     stage === "finishing" || stage === "result"
       ? renderedBack
         ? 0
         : 1
       : stage === "render"
-        ? 0.1 + 0.85 * share
-        : stage === "look"
-          ? 0.05
+        ? Math.max(prepShare, renderShare)
+        : preparing
+          ? 0.01 + prepShare
           : 0;
 
   useEffect(() => {
     engineRef.current?.setGoal(goal);
   }, [goal]);
+
+  useEffect(() => {
+    if (!preparing) return;
+    const started = Date.now();
+    const timer = setInterval(() => setPrepWaited((Date.now() - started) / 1000), 250);
+    return () => {
+      clearInterval(timer);
+    };
+    // Counts from the clip coming in; the move from reading to look keeps counting.
+  }, [preparing]);
 
   // Once every tile is grey after the job, hold a beat, then the playblast wipes in.
   useEffect(() => {
@@ -222,10 +243,14 @@ export function UnrenderApp() {
   }, []);
 
   // The grey shot is the still, or the grey frame without one.
+  // The shot's tiles flip only once its still (or grey frame) has loaded.
   useEffect(() => {
     let live = true;
+    if (!look) engineRef.current?.setShotReady(false);
     void Promise.all([loadImage(look?.still ?? null), loadImage(look?.frame ?? null)]).then(([still, frame]) => {
-      if (live) engineRef.current?.setImages({ still, frame });
+      if (!live) return;
+      engineRef.current?.setImages({ still, frame });
+      engineRef.current?.setShotReady(Boolean(look));
     });
     return () => {
       live = false;
@@ -291,6 +316,7 @@ export function UnrenderApp() {
   }
 
   function resetShot() {
+    setPrepWaited(0);
     abortRef.current?.abort();
     setResult((current) => {
       if (current) URL.revokeObjectURL(current.url);
@@ -521,9 +547,9 @@ export function UnrenderApp() {
       const file = new File([clipBlob], "plaza.mp4", { type: "video/mp4" });
       const ready: Clip = { file, url: URL.createObjectURL(file), trimmed: false };
       setClip(ready);
-      setLook({ frame: DEMO.frame, still: DEMO.still });
       setStage("look");
       await sleep(DEMO_LOOK_MS, controller.signal);
+      setLook({ frame: DEMO.frame, still: DEMO.still });
       setStage("render");
       const started = Date.now();
       for (;;) {
@@ -566,7 +592,7 @@ export function UnrenderApp() {
     setToast(filename);
   }
 
-  const covered = stage === "look" || stage === "render" || stage === "finishing" || (stage === "result" && !renderedBack);
+  const covered = preparing || stage === "render" || stage === "finishing" || (stage === "result" && !renderedBack);
   const showResult = stage === "result" && result;
   const shotUrl = clip?.url ?? preview;
   const accessLabel = key
