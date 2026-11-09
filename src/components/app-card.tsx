@@ -66,7 +66,7 @@ type Recovery = {
  * About how long the Kling video job takes, for the wait screen's tiles while Kling reports no progress.
  * The bar eases toward the end over this time and never claims to be done before the job is.
  */
-const PLAYBLAST_TYPICAL_SECONDS = 150;
+const PLAYBLAST_TYPICAL_SECONDS = 240;
 
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {

@@ -169,12 +169,12 @@ async function postReverse(video: Buffer, reference: Buffer | null, name = "clip
 }
 
 async function main() {
-  assert.equal(REVERSE_3D_MAX_SECONDS, 5);
-  assert.deepEqual(acceptedClipDuration(18), { duration: 5, trimmed: true });
-  assert.deepEqual(acceptedClipDuration(5), { duration: 5, trimmed: false });
-  assert.equal(acceptedClipDuration(5.04).trimmed, false);
-  assert.equal(acceptedClipDuration(5.06).duration, 5);
-  assert.equal(acceptedClipDuration(5.06).trimmed, true);
+  assert.equal(REVERSE_3D_MAX_SECONDS, 10);
+  assert.deepEqual(acceptedClipDuration(18), { duration: 10, trimmed: true });
+  assert.deepEqual(acceptedClipDuration(10), { duration: 10, trimmed: false });
+  assert.equal(acceptedClipDuration(10.04).trimmed, false);
+  assert.equal(acceptedClipDuration(10.06).duration, 10);
+  assert.equal(acceptedClipDuration(10.06).trimmed, true);
   assert.throws(() => acceptedClipDuration(2.9), /at least 3/);
 
   const pick = buildPickWorkflow(12);
@@ -872,7 +872,7 @@ async function main() {
   assert.doesNotMatch(String(bare["20"]?.inputs["model.prompt"]), /@Image1/);
   assert.match(String(bare["20"]?.inputs["model.prompt"]), /never turned into a person/);
 
-  // Any length is accepted: the workflow keeps the first 5 seconds itself.
+  // Any length is accepted: the workflow keeps the first 10 seconds itself.
   const longMp4 = await postReverse(clip12, null);
   assert.equal(longMp4.status, 200, JSON.stringify(longMp4.payload.error ?? longMp4.payload));
   const longWebm = await postReverse(webm12, null, "clip.webm", "video/webm");
@@ -885,7 +885,7 @@ async function main() {
   assert.ok(workflow);
   assert.equal(workflow["12"], undefined);
   assert.equal(workflow["11"]?.class_type, "Video Slice");
-  assert.equal(workflow["11"]?.inputs.duration, 5);
+  assert.equal(workflow["11"]?.inputs.duration, 10);
   assert.deepEqual(workflow["15"]?.inputs.video, ["11", 0]);
   assert.equal(workflow["30"]?.class_type, "LoadImage");
   assert.equal((workflow["30"]?.inputs.image as { info?: { file_path?: string } })?.info?.file_path, "reference.png");

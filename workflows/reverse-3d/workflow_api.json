@@ -16,11 +16,11 @@
         0
       ],
       "start_time": 0,
-      "duration": 5,
+      "duration": 10,
       "strict_duration": false
     },
     "_meta": {
-      "title": "First 5 seconds"
+      "title": "First 10 seconds"
     }
   },
   "15": {

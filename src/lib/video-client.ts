@@ -1,6 +1,6 @@
 /** Browser helpers for Reverse 3D: duration checks, upload transcode, side-by-side compare. */
 
-export const REVERSE_3D_MAX_SECONDS = 5;
+export const REVERSE_3D_MAX_SECONDS = 10;
 export const REVERSE_3D_MIN_SECONDS = 3;
 export const REVERSE_3D_MIN_WIDTH = 720;
 export const REVERSE_3D_FPS = 24;
